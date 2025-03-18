@@ -48,8 +48,8 @@ Use the third terminal to interact with the API using curl commands.
 To register a new user, run:
 
 ```
-curl -X POST -H "Content-Type: application/json" \
--d '{"first_name": "Bob", "last_name": "Dilan", "username": "bob_d", "password": "qwerty", "role": "student", "group_number": "225"}' \
+curl -i -X POST -H "Content-Type: application/json" \
+-d '{"first_name": "Alice", "last_name": "Smith", "username": "alice_s", "password": "password123", "role": "student", "group_number": "301"}' \
 "http://localhost:8090/signup"
 ```
 
@@ -58,8 +58,8 @@ curl -X POST -H "Content-Type: application/json" \
 To authenticate a user, run:
 
 ```
-curl -X POST -H "Content-Type: application/json" \
--d '{"username": "bob_d", "password": "qwerty"}' \
+curl -i -X POST -H "Content-Type: application/json" \
+-d '{"username": "alice_s", "password": "password123"}' \
 "http://localhost:8090/login"
 ```
 
@@ -68,7 +68,8 @@ curl -X POST -H "Content-Type: application/json" \
 To check the current user information, run:
 
 ```
-curl -X GET "http://localhost:8090/whoami" -H "Cookie: jwt=<your_jwt_token>"
+curl -i -X GET "http://localhost:8090/whoami" \
+  -H "Authorization: Bearer <your_jwt_token>"
 ```
 Replace <your_jwt_token> with the actual token received during login.
 

@@ -6,6 +6,7 @@ import os
 import json
 import psycopg2
 from psycopg2.extras import DictCursor
+from functools import wraps
 
 app = Flask(__name__)
 
@@ -41,101 +42,119 @@ def decode_jwt(token):
     return jwt.decode(token, public_key, algorithms=JWT_ALGORITHM)
 
 
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return make_response("Missing or invalid Authorization header", 401)
+
+        token = auth_header.split(' ')[1]
+        try:
+            payload = decode_jwt(token)
+            request.user = payload
+        except jwt.ExpiredSignatureError:
+            return make_response("Token expired", 401)
+        except jwt.InvalidTokenError:
+            return make_response("Invalid token", 401)
+        return f(*args, **kwargs)
+
+    return decorated
+
+
 @app.route("/signup", methods=["POST"])
 def signup():
-    if request.is_json:
-        data = request.get_json()
-    else:
-        data = request.data.decode('utf-8')
-        data = json.loads(data)
-    first_name = data.get("first_name")
-    last_name = data.get("last_name")
-    middle_name = data.get("middle_name")
-    username = data.get("username")
-    password = data.get("password")
-    role = data.get("role")
-    group_number = data.get("group_number")
+    data = request.get_json() if request.is_json else json.loads(request.data)
 
-    if not all([first_name, last_name, username, password, role]):
+    required_fields = ["first_name", "last_name", "username", "password", "role"]
+    if not all(data.get(field) for field in required_fields):
         return make_response("Missing required fields", 400)
 
-    if role == "student" and not group_number:
-        return make_response("Group number is required for students", 400)
+    if data["role"] == "student" and not data.get("group_number"):
+        return make_response("Group number required for students", 400)
 
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=DictCursor)
     try:
-        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+        cursor.execute("SELECT username FROM users WHERE username = %s", (data["username"],))
         if cursor.fetchone():
-            return make_response("User already exists", 403)
+            return make_response("Username already exists", 409)
 
-        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        hashed_pw = bcrypt.hashpw(data["password"].encode('utf-8'), bcrypt.gensalt())
         cursor.execute('''
-            INSERT INTO users (last_name, first_name, middle_name, username, password_hash, role, group_number)
+            INSERT INTO users 
+            (last_name, first_name, middle_name, username, password_hash, role, group_number)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ''', (last_name, first_name, middle_name, username, password_hash, role, group_number))
-        cursor.execute("COMMIT")
+        ''', (
+            data["last_name"],
+            data["first_name"],
+            data.get("middle_name"),
+            data["username"],
+            hashed_pw,
+            data["role"],
+            data.get("group_number")
+        ))
+        conn.commit()
     except psycopg2.Error as e:
-        print(f"Ошибка при выполнении SQL-запроса: {e}")
-        conn.rollback()
-        return make_response("Internal Server Error", 500)
+        print(f"Database error: {e}")
+        return make_response("Internal server error", 500)
     finally:
         conn.close()
 
-    token = generate_jwt(username)
-    response = make_response(json.dumps({"message": "User created", "token": token}), 200)
+    token = generate_jwt(data["username"])
+    response = make_response({"message": "User created successfully"}, 201)
+    response.headers['Authorization'] = f"Bearer {token}"
     return response
 
 
 @app.route("/login", methods=["POST"])
 def login():
-    if request.is_json:
-        data = request.get_json()
-    else:
-        data = request.data.decode('utf-8')
-        data = json.loads(data)
-    username = data.get("username")
-    password = data.get("password")
+    data = request.get_json() if request.is_json else json.loads(request.data)
 
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=DictCursor)
-    cursor.execute('SELECT * FROM users WHERE username = %s', (username,))
-    user = cursor.fetchone()
-    conn.close()
+    try:
+        cursor.execute('''
+            SELECT username, password_hash 
+            FROM users 
+            WHERE username = %s
+        ''', (data["username"],))
+        user = cursor.fetchone()
+    except psycopg2.Error as e:
+        print(f"Database error: {e}")
+        return make_response("Internal server error", 500)
+    finally:
+        conn.close()
 
-    if not user:
-        return make_response("Invalid username or password", 403)
+    if not user or not bcrypt.checkpw(data["password"].encode('utf-8'), user['password_hash'].tobytes()):
+        return make_response("Invalid credentials", 401)
 
-    if not bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].tobytes()):
-        return make_response("Invalid username or password", 403)
-
-    token = generate_jwt(username)
-    response = make_response(json.dumps({"message": "User logged in", "token": token}), 200)
+    token = generate_jwt(data["username"])
+    response = make_response({"message": "Login successful"}, 200)
+    response.headers['Authorization'] = f"Bearer {token}"
     return response
 
 
 @app.route("/whoami", methods=["GET"])
+@token_required
 def whoami():
-    token = request.cookies.get("jwt")
-    if not token:
-        return make_response("Missing token", 401)
-    try:
-        payload = decode_jwt(token)
-    except jwt.ExpiredSignatureError:
-        return make_response("Token expired", 400)
-    except jwt.InvalidTokenError:
-        return make_response("Invalid token", 400)
-
-    username = payload["username"]
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=DictCursor)
-    cursor.execute('SELECT * FROM users WHERE username = %s', (username,))
-    user = cursor.fetchone()
-    conn.close()
-
-    if not user:
-        return make_response("User does not exist", 400)
-    return make_response(f"Hello, {username}", 200)
+    try:
+        cursor.execute('''
+            SELECT first_name, last_name, role 
+            FROM users 
+            WHERE username = %s
+        ''', (request.user["username"],))
+        user = cursor.fetchone()
+        if not user:
+            return make_response("User not found", 404)
+        return make_response(json.dumps(dict(user)), 200)
+    except psycopg2.Error as e:
+        print(f"Database error: {e}")
+        return make_response("Internal server error", 500)
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
