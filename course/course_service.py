@@ -49,30 +49,42 @@ def token_required(f):
     return decorated
 
 
-@app.route("/rate", methods=["POST"])
+@app.route("/sop", methods=["POST"])
 @token_required
-def rate_course():
+def submit_sop():
     data = request.get_json()
-    if not data or "subject" not in data or "rating" not in data:
-        return make_response("Missing required parameters", 400)
+    required_fields = [
+        "course_id", "lecturer_feedback", "lecturer_clarity", "lecturer_requirements",
+        "lecturer_communication", "seminarist_feedback", "seminarist_clarity",
+        "seminarist_requirements", "seminarist_communication"
+    ]
+
+    if not all(field in data for field in required_fields):
+        return make_response("Missing required fields", 400)
 
     try:
-        rating = int(data["rating"])
-        if not (1 <= rating <= 5):
-            raise ValueError
-    except ValueError:
-        return make_response("Invalid rating value", 400)
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO ratings 
-            (student_username, subject, rating)
-            VALUES (%s, %s, %s)
-        ''', (request.user["username"], data["subject"], rating))
+            INSERT INTO sop_responses 
+            (student_username, course_id, lecturer_feedback, lecturer_clarity, 
+             lecturer_requirements, lecturer_communication, seminarist_feedback, 
+             seminarist_clarity, seminarist_requirements, seminarist_communication)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (
+            request.user["username"],
+            data["course_id"],
+            data["lecturer_feedback"],
+            data["lecturer_clarity"],
+            data["lecturer_requirements"],
+            data["lecturer_communication"],
+            data["seminarist_feedback"],
+            data["seminarist_clarity"],
+            data["seminarist_requirements"],
+            data["seminarist_communication"]
+        ))
         conn.commit()
-        return make_response({"message": "Rating added successfully"}, 201)
+        return make_response({"message": "SOP response submitted successfully"}, 201)
     except psycopg2.Error as e:
         print(f"Database error: {e}")
         conn.rollback()
@@ -81,20 +93,49 @@ def rate_course():
         conn.close()
 
 
-@app.route("/my_courses", methods=["GET"])
+@app.route("/courses", methods=["GET"])
 @token_required
-def get_my_courses():
+def get_student_courses():
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=DictCursor)
     try:
         cursor.execute('''
-            SELECT subject, rating, created_at 
-            FROM ratings 
-            WHERE student_username = %s 
-            ORDER BY created_at DESC
+            SELECT c.id, c.subject, t1.last_name AS lecturer_last_name, 
+                   t1.first_name AS lecturer_first_name, 
+                   t2.last_name AS seminarist_last_name, 
+                   t2.first_name AS seminarist_first_name
+            FROM courses c
+            JOIN teachers t1 ON c.lecturer_id = t1.id
+            JOIN teachers t2 ON c.seminarist_id = t2.id
+            WHERE c.group_number = (
+                SELECT group_number FROM users WHERE username = %s
+            )
         ''', (request.user["username"],))
-        results = [dict(row) for row in cursor.fetchall()]
-        return make_response(json.dumps(results), 200)
+        courses = [dict(row) for row in cursor.fetchall()]
+        response = make_response(json.dumps(courses, ensure_ascii=False), 200)
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+        return response
+    except psycopg2.Error as e:
+        print(f"Database error: {e}")
+        return make_response("Internal server error", 500)
+    finally:
+        conn.close()
+
+
+@app.route("/sop/<int:course_id>", methods=["GET"])
+@token_required
+def get_sop_for_course(course_id):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=DictCursor)
+    try:
+        cursor.execute('''
+            SELECT * FROM sop_responses 
+            WHERE student_username = %s AND course_id = %s
+        ''', (request.user["username"], course_id))
+        sop_response = cursor.fetchone()
+        if not sop_response:
+            return make_response("No SOP response found for this course", 404)
+        return make_response(json.dumps(dict(sop_response), ensure_ascii=False), 200)
     except psycopg2.Error as e:
         print(f"Database error: {e}")
         return make_response("Internal server error", 500)

@@ -30,66 +30,6 @@ def create_connection(db_name, user, password, host='db', port='5432'):
     return conn
 
 
-def create_tables(conn):
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                last_name VARCHAR(100) NOT NULL,
-                first_name VARCHAR(100) NOT NULL,
-                middle_name VARCHAR(100),
-                username VARCHAR(100) UNIQUE NOT NULL,
-                password_hash BYTEA NOT NULL,  -- Изменено на BYTEA
-                role VARCHAR(50) NOT NULL CHECK(role IN ('student', 'teacher', 'college_worker')),
-                group_number VARCHAR(100)
-            );
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS group_subjects (
-                id SERIAL PRIMARY KEY,
-                group_number VARCHAR(100) NOT NULL,
-                subject VARCHAR(100) NOT NULL
-            );
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS teachers (
-                id SERIAL PRIMARY KEY,
-                last_name VARCHAR(100) NOT NULL,
-                first_name VARCHAR(100) NOT NULL,
-                middle_name VARCHAR(100),
-                subject VARCHAR(100) NOT NULL,
-                seminarist_last_name VARCHAR(100),
-                seminarist_first_name VARCHAR(100),
-                seminarist_middle_name VARCHAR(100),
-                group_number VARCHAR(100)
-            );
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS teacher_roles (
-                id SERIAL PRIMARY KEY,
-                last_name VARCHAR(100) NOT NULL,
-                first_name VARCHAR(100) NOT NULL,
-                middle_name VARCHAR(100),
-                subject VARCHAR(100) NOT NULL,
-                group_number VARCHAR(100),
-                role VARCHAR(50) NOT NULL CHECK(role IN ('lecturer', 'seminarist'))
-            );
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS ratings (
-                id SERIAL PRIMARY KEY,
-                student_username VARCHAR(100) NOT NULL,
-                subject VARCHAR(100) NOT NULL,
-                rating INTEGER NOT NULL CHECK(rating >= 1 AND rating <= 5),
-                FOREIGN KEY (student_username) REFERENCES users(username)
-            );
-        ''')
-        conn.commit()
-    except Error as e:
-        print(e)
-
-
 def init_db():
     database = "college"
     user = "postgres"
@@ -97,7 +37,6 @@ def init_db():
     create_database(database, user, password)
     conn = create_connection(database, user, password)
     if conn is not None:
-        create_tables(conn)
         conn.close()
     else:
         print("Error: Cannot create the database connection.")
