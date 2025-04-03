@@ -5,13 +5,15 @@ import bcrypt
 import os
 import json
 import psycopg2
+import datetime
 from psycopg2.extras import DictCursor
 from functools import wraps
 
 app = Flask(__name__)
 
 JWT_ALGORITHM = "RS256"
-JWT_EXP_DELTA_SECONDS = 3600
+ACCESS_EXP_DELTA_SECONDS = 3600
+REFRESH_EXP_DELTA_SECONDS = 604800
 PRIVATE_KEY_PATH = os.getenv('JWT_PRIVATE_KEY_FILE', '/tmp/signature.pem')
 PUBLIC_KEY_PATH = os.getenv('JWT_PUBLIC_KEY_FILE', '/tmp/signature.pub')
 
@@ -30,10 +32,20 @@ def get_db_connection():
     return conn
 
 
-def generate_jwt(username):
+def generate_access_token(email):
     payload = {
-        "username": username,
-        "exp": int(time.time()) + JWT_EXP_DELTA_SECONDS
+        "email": email,
+        "type": "access",
+        "exp": int(time.time()) + ACCESS_EXP_DELTA_SECONDS
+    }
+    return jwt.encode(payload, private_key, algorithm=JWT_ALGORITHM)
+
+
+def generate_refresh_token(email):
+    payload = {
+        "email": email,
+        "type": "refresh",
+        "exp": int(time.time()) + REFRESH_EXP_DELTA_SECONDS
     }
     return jwt.encode(payload, private_key, algorithm=JWT_ALGORITHM)
 
@@ -52,6 +64,8 @@ def token_required(f):
         token = auth_header.split(' ')[1]
         try:
             payload = decode_jwt(token)
+            if payload.get('type') != 'access':
+                return make_response("Invalid token type", 401)
             request.user = payload
         except jwt.ExpiredSignatureError:
             return make_response("Token expired", 401)
@@ -62,63 +76,31 @@ def token_required(f):
     return decorated
 
 
-@app.route("/signup", methods=["POST"])
-def signup():
-    data = request.get_json() if request.is_json else json.loads(request.data)
+@app.route("/utils/generate-password-hash", methods=["POST"])
+def generate_password_hash():
+    """Временный эндпоинт для генерации хэша пароля (только для админов)"""
+    data = request.get_json()
+    if not data or 'password' not in data:
+        return make_response("Password required", 400)
 
-    required_fields = ["first_name", "last_name", "username", "password", "role"]
-    if not all(data.get(field) for field in required_fields):
-        return make_response("Missing required fields", 400)
-
-    if data["role"] == "student" and not data.get("group_number"):
-        return make_response("Group number required for students", 400)
-
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=DictCursor)
-    try:
-        cursor.execute("SELECT username FROM users WHERE username = %s", (data["username"],))
-        if cursor.fetchone():
-            return make_response("Username already exists", 409)
-
-        hashed_pw = bcrypt.hashpw(data["password"].encode('utf-8'), bcrypt.gensalt())
-        cursor.execute('''
-            INSERT INTO users 
-            (last_name, first_name, middle_name, username, password_hash, role, group_number)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ''', (
-            data["last_name"],
-            data["first_name"],
-            data.get("middle_name"),
-            data["username"],
-            hashed_pw,
-            data["role"],
-            data.get("group_number")
-        ))
-        conn.commit()
-    except psycopg2.Error as e:
-        print(f"Database error: {e}")
-        return make_response("Internal server error", 500)
-    finally:
-        conn.close()
-
-    token = generate_jwt(data["username"])
-    response = make_response({"message": "User created successfully"}, 201)
-    response.headers['Authorization'] = f"Bearer {token}"
-    return response
+    hashed = bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt())
+    return make_response({"password_hash": hashed.decode('utf-8')}, 200)
 
 
 @app.route("/login", methods=["POST"])
 def login():
-    data = request.get_json() if request.is_json else json.loads(request.data)
+    data = request.get_json()
+    if not data or 'email' not in data or 'password' not in data:
+        return make_response("Email and password required", 400)
 
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=DictCursor)
     try:
         cursor.execute('''
-            SELECT username, password_hash 
+            SELECT id, email, password_hash 
             FROM users 
-            WHERE username = %s
-        ''', (data["username"],))
+            WHERE email = %s
+        ''', (data["email"],))
         user = cursor.fetchone()
     except psycopg2.Error as e:
         print(f"Database error: {e}")
@@ -127,34 +109,70 @@ def login():
         conn.close()
 
     if not user or not bcrypt.checkpw(data["password"].encode('utf-8'), user['password_hash'].tobytes()):
-        return make_response("Invalid credentials", 401)
+        return make_response("Invalid email or password", 401)
 
-    token = generate_jwt(data["username"])
-    response = make_response({"message": "Login successful"}, 200)
-    response.headers['Authorization'] = f"Bearer {token}"
-    return response
+    access_token = generate_access_token(user['email'])
+    refresh_token = generate_refresh_token(user['email'])
 
-
-@app.route("/whoami", methods=["GET"])
-@token_required
-def whoami():
+    expires_at = datetime.datetime.utcnow() + datetime.timedelta(seconds=REFRESH_EXP_DELTA_SECONDS)
     conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=DictCursor)
     try:
+        cursor = conn.cursor()
         cursor.execute('''
-            SELECT first_name, last_name, role 
-            FROM users 
-            WHERE username = %s
-        ''', (request.user["username"],))
-        user = cursor.fetchone()
-        if not user:
-            return make_response("User not found", 404)
-        return make_response(json.dumps(dict(user)), 200)
+            INSERT INTO refresh_tokens (token, user_id, expires_at)
+            VALUES (%s, %s, %s)
+        ''', (refresh_token, user['id'], expires_at))
     except psycopg2.Error as e:
         print(f"Database error: {e}")
         return make_response("Internal server error", 500)
     finally:
         conn.close()
+
+    return make_response({
+        "access_token": access_token,
+        "refresh_token": refresh_token
+    }, 200)
+
+
+@app.route("/refresh", methods=["POST"])
+def refresh():
+    data = request.get_json()
+    if not data or 'refresh_token' not in data:
+        return make_response("Refresh token required", 400)
+
+    refresh_token = data['refresh_token']
+    try:
+        payload = decode_jwt(refresh_token)
+        if payload.get('type') != 'refresh':
+            raise jwt.InvalidTokenError
+
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=DictCursor)
+        cursor.execute('''
+            SELECT user_id, expires_at 
+            FROM refresh_tokens 
+            WHERE token = %s
+        ''', (refresh_token,))
+        token_record = cursor.fetchone()
+        conn.close()
+
+        if not token_record:
+            raise jwt.InvalidTokenError
+
+        if datetime.datetime.utcnow() > token_record['expires_at']:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM refresh_tokens WHERE token = %s', (refresh_token,))
+            conn.close()
+            return make_response("Refresh token expired", 401)
+
+        new_access_token = generate_access_token(payload['email'])
+        return make_response({"access_token": new_access_token}, 200)
+
+    except jwt.ExpiredSignatureError:
+        return make_response("Refresh token expired", 401)
+    except jwt.InvalidTokenError:
+        return make_response("Invalid refresh token", 401)
 
 
 if __name__ == "__main__":

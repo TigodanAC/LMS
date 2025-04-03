@@ -11,6 +11,7 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d
 
   auth_service:
     build: ./auth
@@ -22,6 +23,7 @@ services:
       DATABASE_URL: "postgresql://postgres:qwerty@db:5432/college"
       JWT_PRIVATE_KEY_FILE: /tmp/signature.pem
       JWT_PUBLIC_KEY_FILE: /tmp/signature.pub
+    command: sh -c "python database.py && flask run --host=0.0.0.0 --port=8090"
 
   course_service:
     build: ./course
@@ -32,6 +34,7 @@ services:
     environment:
       DATABASE_URL: "postgresql://postgres:qwerty@db:5432/college"
       JWT_PUBLIC_KEY_FILE: /tmp/signature.pub
+    command: sh -c "python database.py && flask run --host=0.0.0.0 --port=8091"
 
 volumes:
   postgres_data:
