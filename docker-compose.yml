@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   db:
-    image: postgres:13
+    image: postgres:13-alpine
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: qwerty
@@ -11,30 +11,29 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./sql:/docker-entrypoint-initdb.d
 
-  auth_service:
-    build: ./auth
+  auth:
+    build: .
     ports:
       - "8090:8090"
-    depends_on:
-      - db
     environment:
       DATABASE_URL: "postgresql://postgres:qwerty@db:5432/college"
-      JWT_PRIVATE_KEY_FILE: /tmp/signature.pem
-      JWT_PUBLIC_KEY_FILE: /tmp/signature.pub
-    command: sh -c "python database.py && flask run --host=0.0.0.0 --port=8090"
+      JWT_PRIVATE_KEY_FILE: /app/configs/signature.pem
+      JWT_PUBLIC_KEY_FILE: /app/configs/signature.pub
+    volumes:
+      - ./configs:/app/configs
+    command: sh -c "python -c 'from database.session import init_db; init_db()' && python -m auth.app"
 
-  course_service:
-    build: ./course
+  course:
+    build: .
     ports:
       - "8091:8091"
-    depends_on:
-      - db
     environment:
       DATABASE_URL: "postgresql://postgres:qwerty@db:5432/college"
-      JWT_PUBLIC_KEY_FILE: /tmp/signature.pub
-    command: sh -c "python database.py && flask run --host=0.0.0.0 --port=8091"
+      JWT_PUBLIC_KEY_FILE: /app/configs/signature.pub
+    volumes:
+      - ./configs:/app/configs
+    command: python -m course.app
 
 volumes:
   postgres_data:

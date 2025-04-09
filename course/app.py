@@ -1,0 +1,182 @@
+from flask import Flask, request, make_response, jsonify, json
+from flask import Response
+import jwt
+import os
+from functools import wraps
+from course.service import CourseService
+from collections import OrderedDict
+
+app = Flask(__name__)
+app.config["JSON_SORT_KEYS"] = False
+
+JWT_ALGORITHM = "RS256"
+PUBLIC_KEY_PATH = os.getenv('JWT_PUBLIC_KEY_FILE', '/app/configs/signature.pub')
+
+with open(PUBLIC_KEY_PATH, 'rb') as key_file:
+    public_key = key_file.read()
+
+
+def decode_jwt(token: str) -> dict:
+    return jwt.decode(token, public_key, algorithms=[JWT_ALGORITHM])
+
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return make_response("Missing or invalid Authorization header", 401)
+
+        token = auth_header.split(' ')[1]
+        try:
+            payload = decode_jwt(token)
+            request.user = payload
+        except jwt.ExpiredSignatureError:
+            return make_response("Token expired", 401)
+        except jwt.InvalidTokenError:
+            return make_response("Invalid token", 401)
+        return f(*args, **kwargs)
+
+    return decorated
+
+
+@app.route("/courses", methods=["GET"])
+@token_required
+def get_student_courses():
+    try:
+        service = CourseService()
+        limit = request.args.get('limit', default=20, type=int)
+        offset = request.args.get('offset', default=0, type=int)
+        search = request.args.get('search', default='', type=str)
+        user_id = request.user.get("user_id")
+        if not user_id:
+            return make_response("User ID not found in token", 400)
+
+        courses_info, total = service.get_student_courses_info(
+            user_id=user_id,
+            search=search,
+            limit=limit,
+            offset=offset
+        )
+
+        response = make_response(
+            json.dumps({
+                "success": True,
+                "data": courses_info,
+                "pagination": {
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset
+                }
+            }, ensure_ascii=False),
+        )
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+        return response
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return make_response("Internal server error", 500)
+
+
+@app.route("/courses/<course_id>", methods=["GET"])
+@token_required
+def get_course_details(course_id):
+    try:
+        service = CourseService()
+        user_id = request.user.get("user_id")
+        if not user_id:
+            return Response("User ID not found in token", status=400)
+
+        course_data = service.get_course_details(course_id, user_id)
+        if not course_data:
+            return Response("Course not found or access denied", status=404)
+
+        response_data = OrderedDict([
+            ("success", True),
+            ("data", OrderedDict([
+                ("course_id", course_data["course_id"]),
+                ("name", course_data["name"]),
+                ("description", course_data["description"]),
+                ("lector", OrderedDict([
+                    ("lector_id", course_data["lector"]["lector_id"]),
+                    ("first_name", course_data["lector"]["first_name"]),
+                    ("last_name", course_data["lector"]["last_name"])
+                ])),
+                ("blocks", course_data["blocks"])
+            ]))
+        ])
+
+        json_response = json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False)
+        return Response(json_response, status=200, content_type='application/json')
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return Response("Internal server error", status=500)
+
+
+@app.route("/sop", methods=["POST"])
+@token_required
+def submit_sop():
+    try:
+        data = request.get_json()
+        if not data or not isinstance(data, list):
+            return make_response("Invalid request format", 400)
+
+        service = CourseService()
+        result = service.submit_sop(
+            user_id=request.user["user_id"],
+            sop_data=data
+        )
+
+        return jsonify(result), result.get("status", 500)
+    except Exception as e:
+        print(f"Error: {e}")
+        return make_response("Internal server error", 500)
+
+
+@app.route("/sop/teacher_results", methods=["GET"])
+@token_required
+def get_teacher_sop_results():
+    try:
+        service = CourseService()
+        user_id = request.user["user_id"]
+        user_role = request.user.get("role")
+
+        if user_role not in ["lecturer", "seminarist"]:
+            return make_response("Access denied", 403)
+
+        result = service.get_teacher_sop_results(user_id, user_role)
+        response = make_response(
+            json.dumps(result, ensure_ascii=False, indent=2, sort_keys=False),
+            result.get("status", 200)
+        )
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+        return response
+    except Exception as e:
+        print(f"Error: {e}")
+        return make_response("Internal server error", 500)
+
+
+@app.route("/sop/course_results/<course_id>", methods=["GET"])
+@token_required
+def get_course_sop_results(course_id):
+    try:
+        service = CourseService()
+        user_id = request.user["user_id"]
+        user_role = request.user.get("role")
+        result = service.get_course_sop_results(course_id, user_id, user_role)
+
+        response = make_response(
+            json.dumps(result, ensure_ascii=False, indent=2, sort_keys=False),
+            result.get("status", 200)
+        )
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+        return response
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return make_response("Internal server error", 500)
+
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=8091)
