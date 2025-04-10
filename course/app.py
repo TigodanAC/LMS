@@ -68,7 +68,7 @@ def get_student_courses():
                     "limit": limit,
                     "offset": offset
                 }
-            }, ensure_ascii=False),
+            }, ensure_ascii=False, indent=2),
         )
         response.headers['Content-Type'] = 'application/json; charset=utf-8'
         return response
@@ -94,7 +94,6 @@ def get_course_details(course_id):
         response_data = OrderedDict([
             ("success", True),
             ("data", OrderedDict([
-                ("course_id", course_data["course_id"]),
                 ("name", course_data["name"]),
                 ("description", course_data["description"]),
                 ("lector", OrderedDict([
@@ -176,6 +175,134 @@ def get_course_sop_results(course_id):
     except Exception as e:
         print(f"Error: {e}")
         return make_response("Internal server error", 500)
+
+
+@app.route("/units/<int:unit_id>", methods=["GET"])
+@token_required
+def get_unit(unit_id):
+    try:
+        service = CourseService()
+        user_id = request.user.get("user_id")
+        if not user_id:
+            return make_response("User ID not found in token", 400)
+
+        unit_data = service.get_unit_by_id(unit_id, user_id)
+        if not unit_data:
+            return make_response("Unit not found or access denied", 404)
+
+        try:
+            content = json.loads(unit_data["content"])
+        except (ValueError, TypeError):
+            content = unit_data["content"]
+
+        response_data = {
+            "success": True,
+            "data": {
+                "name": unit_data["name"],
+                "type": unit_data["type"],
+                "content": content
+            }
+        }
+
+        response = make_response(
+            json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+            200
+        )
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+        return response
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return make_response("Internal server error", 500)
+
+
+@app.route("/test_results/<test_id>", methods=["POST"])
+@token_required
+def submit_test_results(test_id):
+    try:
+        service = CourseService()
+        user_id = request.user.get("user_id")
+        user_role = request.user.get("role")
+
+        if not user_id:
+            return make_response("User ID not found in token", 400)
+
+        access_error = service.verify_test_access(user_id, user_role, test_id)
+        if access_error:
+            return jsonify(access_error), access_error["status"]
+
+        data = request.get_json()
+        if not data or not isinstance(data, list):
+            return make_response("Invalid request format", 400)
+
+        result = service.submit_test_results(user_id, test_id, data)
+        return jsonify(result), result.get("status", 200)
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return make_response("Internal server error", 500)
+
+
+@app.route("/tests/<test_id>", methods=["GET"])
+@token_required
+def get_test_or_results(test_id):
+    try:
+        service = CourseService()
+        user_id = request.user.get("user_id")
+        user_role = request.user.get("role")
+
+        if not user_id:
+            response_data = OrderedDict([
+                ("success", False),
+                ("error", "User ID not found in token")
+            ])
+            json_response = json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False)
+            return Response(json_response, status=400, content_type='application/json')
+
+        access_error = service.verify_test_access(user_id, user_role, test_id)
+        if access_error:
+            response_data = OrderedDict([
+                ("success", False),
+                ("error", access_error.get("error")),
+                ("status", access_error.get("status"))
+            ])
+            json_response = json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False)
+            return Response(json_response, status=access_error.get("status", 403),
+                            content_type='application/json')
+
+        result = service.get_test_or_results(user_id, test_id)
+
+        if "error" in result:
+            response_data = OrderedDict([
+                ("success", False),
+                ("error", result["error"]),
+                ("status", result["status"])
+            ])
+            status_code = result["status"]
+        else:
+            if "data" in result:
+                response_data = OrderedDict([
+                    ("success", True),
+                    ("data", result["data"])
+                ])
+            else:
+                response_data = OrderedDict([
+                    ("success", True),
+                    ("results", result["results"])
+                ])
+            status_code = result.get("status", 200)
+
+        json_response = json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False)
+        return Response(json_response, status=status_code, content_type='application/json')
+
+    except Exception as e:
+        print(f"Error: {e}")
+        response_data = OrderedDict([
+            ("success", False),
+            ("error", "Internal server error")
+        ])
+        json_response = json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False)
+        return Response(json_response, status=500, content_type='application/json')
 
 
 if __name__ == "__main__":

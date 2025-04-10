@@ -49,5 +49,22 @@ class CourseService:
     def get_course_sop_results(self, course_id: str, current_user_id: str, current_user_role: str) -> Dict:
         return self.queries.get_course_sop_results(course_id, current_user_id, current_user_role)
 
+    def get_unit_by_id(self, unit_id: int, user_id: str) -> Optional[Dict]:
+        return self.queries.get_unit_by_id(unit_id, user_id)
+
+    def verify_test_access(self, user_id: str, user_role: str, test_id: str) -> Optional[Dict]:
+        if user_role == "admin":
+            return None
+        access_granted = self.queries.check_test_access(user_id, user_role, test_id)
+        if not access_granted:
+            return {"error": "Access denied to this test", "status": 403}
+        return None
+
+    def submit_test_results(self, user_id: str, test_id: str, user_answers: List[Dict]) -> Dict:
+        return self.queries.submit_test_results(user_id, test_id, user_answers)
+
+    def get_test_or_results(self, user_id: str, test_id: str) -> Dict:
+        return self.queries.get_test_or_results(user_id, test_id)
+
     def __del__(self):
         self.db.close()
