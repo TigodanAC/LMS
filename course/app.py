@@ -48,16 +48,46 @@ def get_student_courses():
         limit = request.args.get('limit', default=20, type=int)
         offset = request.args.get('offset', default=0, type=int)
         search = request.args.get('search', default='', type=str)
+        student_id = request.args.get('student_id', type=str)
         user_id = request.user.get("user_id")
+        user_role = request.user.get("role")
+
         if not user_id:
             return make_response("User ID not found in token", 400)
 
-        courses_info, total = service.get_student_courses_info(
-            user_id=user_id,
-            search=search,
-            limit=limit,
-            offset=offset
-        )
+        if user_role in ["lecturer", "seminarist"]:
+            return make_response(
+                "This endpoint is only for students and admins",
+                403
+            )
+
+        if user_role == "admin" and student_id:
+            is_valid_student = service.validate_student_id(student_id)
+            if not is_valid_student:
+                return make_response(
+                    "student_id is incorrect - either doesn't exist or not a student",
+                    400
+                )
+            target_user_id = student_id
+        else:
+            target_user_id = user_id
+
+        if student_id and user_role != "admin":
+            return make_response("Only admin can specify student_id parameter", 403)
+
+        if user_role == "admin" and not student_id:
+            courses_info, total = service.get_all_courses_info(
+                search=search,
+                limit=limit,
+                offset=offset
+            )
+        else:
+            courses_info, total = service.get_student_courses_info(
+                user_id=target_user_id,
+                search=search,
+                limit=limit,
+                offset=offset
+            )
 
         response = make_response(
             json.dumps({
@@ -140,17 +170,34 @@ def get_teacher_sop_results():
         service = CourseService()
         user_id = request.user["user_id"]
         user_role = request.user.get("role")
-
-        if user_role not in ["lecturer", "seminarist"]:
+        teacher_id = request.args.get('teacher_id', type=str)
+        if user_role == "student":
             return make_response("Access denied", 403)
 
-        result = service.get_teacher_sop_results(user_id, user_role)
+        if user_role == "admin" and teacher_id:
+            target_teacher_id = teacher_id
+            target_role = service.determine_teacher_role(teacher_id)
+        elif user_role == "admin" and not teacher_id:
+            return make_response("Please specify teacher_id parameter", 403)
+        else:
+            target_teacher_id = user_id
+            target_role = user_role
+
+        if target_role not in ["lecturer", "seminarist"]:
+            return make_response("teacher_id is incorrect - either doesn't exist or not a teacher", 403)
+
+        if teacher_id and user_role != "admin":
+            return make_response("Only admin can specify teacher_id parameter", 403)
+
+        result = service.get_teacher_sop_results(target_teacher_id, target_role)
+
         response = make_response(
             json.dumps(result, ensure_ascii=False, indent=2, sort_keys=False),
             result.get("status", 200)
         )
         response.headers['Content-Type'] = 'application/json; charset=utf-8'
         return response
+
     except Exception as e:
         print(f"Error: {e}")
         return make_response("Internal server error", 500)

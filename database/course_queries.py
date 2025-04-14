@@ -11,6 +11,19 @@ class CourseQueries:
     def __init__(self, db: Session):
         self.db = db
 
+    def validate_student_id(self, student_id: str) -> bool:
+        student = self.db.query(User).filter(
+            User.user_id == student_id,
+            User.role == "student"
+        ).first()
+        return student is not None
+
+    def determine_teacher_role(self, teacher_id: str) -> str:
+        teacher = self.db.query(User).filter(
+            User.user_id == teacher_id
+        ).first()
+        return teacher.role if teacher else None
+
     def get_student_courses_info(
             self,
             user_id: str,
@@ -61,6 +74,57 @@ class CourseQueries:
                     "first_name": seminarist.first_name if seminarist else "",
                     "last_name": seminarist.last_name if seminarist else ""
                 } if seminarist else None
+            }
+            course_list.append(course_data)
+
+        return course_list, total
+
+    def get_all_courses_info(
+            self,
+            search: str = '',
+            limit: int = 20,
+            offset: int = 0
+    ) -> Tuple[List[Dict], int]:
+        query = self.db.query(Course)
+
+        if search:
+            query = query.filter(
+                or_(
+                    Course.name.ilike(f"%{search}%"),
+                    Course.description.ilike(f"%{search}%")
+                )
+            )
+
+        total = query.count()
+        courses = query.offset(offset).limit(limit).all()
+
+        course_list = []
+        for course in courses:
+            lector = self.db.query(User) \
+                .filter(User.user_id == course.lector_id) \
+                .first()
+
+            seminarists = self.db.query(User) \
+                .join(Group, User.user_id == Group.seminarist_id) \
+                .filter(Group.course_id == course.course_id) \
+                .all()
+
+            seminarists_data = [{
+                "seminarist_id": seminarist.user_id,
+                "first_name": seminarist.first_name if seminarist else "",
+                "last_name": seminarist.last_name if seminarist else ""
+            } for seminarist in seminarists]
+
+            course_data = {
+                "course_id": course.course_id,
+                "course_name": course.name,
+                "description": course.description,
+                "lector": {
+                    "lector_id": course.lector_id,
+                    "first_name": lector.first_name if lector else "",
+                    "last_name": lector.last_name if lector else ""
+                },
+                "seminarists": seminarists_data if seminarists else None
             }
             course_list.append(course_data)
 

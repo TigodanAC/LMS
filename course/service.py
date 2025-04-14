@@ -9,6 +9,12 @@ class CourseService:
         self.db = SessionLocal()
         self.queries = CourseQueries(self.db)
 
+    def validate_student_id(self, student_id: str) -> bool:
+        return self.queries.validate_student_id(student_id)
+
+    def determine_teacher_role(self, teacher_id: str) -> str:
+        return self.queries.determine_teacher_role(teacher_id)
+
     def get_student_courses_info(
             self,
             user_id: str,
@@ -18,6 +24,18 @@ class CourseService:
     ) -> Tuple[List[Dict], int]:
         return self.queries.get_student_courses_info(
             user_id=user_id,
+            search=search,
+            limit=limit,
+            offset=offset
+        )
+
+    def get_all_courses_info(
+            self,
+            search: str = '',
+            limit: int = 20,
+            offset: int = 0
+    ) -> Tuple[List[Dict], int]:
+        return self.queries.get_all_courses_info(
             search=search,
             limit=limit,
             offset=offset
