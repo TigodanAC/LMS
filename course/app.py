@@ -283,7 +283,19 @@ def submit_test_results(test_id):
             return make_response("Invalid request format", 400)
 
         result = service.submit_test_results(user_id, test_id, data)
-        return jsonify(result), result.get("status", 200)
+
+        if isinstance(result, dict) and "error" in result:
+            return make_response(
+                json.dumps(result, ensure_ascii=False, indent=2),
+                result.get("status", 400),
+                {'Content-Type': 'application/json; charset=utf-8'}
+            )
+
+        return make_response(
+            json.dumps({"data": result, "status": 201}, ensure_ascii=False, indent=2),
+            201,
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
 
     except Exception as e:
         print(f"Error: {e}")
@@ -350,6 +362,203 @@ def get_test_or_results(test_id):
         ])
         json_response = json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False)
         return Response(json_response, status=500, content_type='application/json')
+
+
+@app.route("/test_results/<test_id>/user/<user_id>", methods=["GET"])
+@token_required
+def get_student_test_results(test_id, user_id):
+    try:
+        service = CourseService()
+        teacher_id = request.user.get("user_id")
+        teacher_role = request.user.get("role")
+
+        if teacher_role not in ["lecturer", "seminarist"]:
+            response_data = {"error": "Access denied", "status": 403}
+            return make_response(
+                json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+                403,
+                {'Content-Type': 'application/json; charset=utf-8'}
+            )
+
+        user_exists = service.check_user_exists(user_id)
+        if not user_exists:
+            response_data = {"error": "User not found", "status": 404}
+            return make_response(
+                json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+                404,
+                {'Content-Type': 'application/json; charset=utf-8'}
+            )
+
+        result = service.get_student_test_results(teacher_id, teacher_role, test_id, user_id)
+
+        if isinstance(result, dict) and "error" in result:
+            return make_response(
+                json.dumps(result, ensure_ascii=False, indent=2, sort_keys=False),
+                result.get("status", 400),
+                {'Content-Type': 'application/json; charset=utf-8'}
+            )
+
+        response_data = {
+            "data": result if result else {},
+            "status": 200
+        }
+        return make_response(
+            json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+            200,
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
+
+    except Exception as e:
+        print(f"Error: {e}")
+        response_data = {
+            "error": "Internal server error",
+            "status": 500
+        }
+        return make_response(
+            json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+            500,
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
+
+
+@app.route("/test_results/<test_id>/user/<user_id>", methods=["POST"])
+@token_required
+def update_student_test_results(test_id, user_id):
+    try:
+        service = CourseService()
+        teacher_id = request.user.get("user_id")
+        teacher_role = request.user.get("role")
+
+        if teacher_role not in ["lecturer", "seminarist"]:
+            response_data = {"error": "Access denied", "status": 403}
+            return make_response(
+                json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+                403,
+                {'Content-Type': 'application/json; charset=utf-8'}
+            )
+
+        data = request.get_json()
+        if not data or not isinstance(data, list):
+            response_data = {"error": "Invalid request format", "status": 400}
+            return make_response(
+                json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+                400,
+                {'Content-Type': 'application/json; charset=utf-8'}
+            )
+
+        result = service.update_student_test_results(teacher_id, teacher_role, test_id, user_id, data)
+        return make_response(
+            json.dumps(result, ensure_ascii=False, indent=2, sort_keys=False),
+            result.get("status", 200),
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
+
+    except Exception as e:
+        print(f"Error: {e}")
+        response_data = {
+            "error": "Internal server error",
+            "status": 500
+        }
+        return make_response(
+            json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+            500,
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
+
+
+@app.route("/units/<int:unit_id>", methods=["POST"])
+@token_required
+def update_unit_content(unit_id):
+    try:
+        service = CourseService()
+        teacher_id = request.user.get("user_id")
+        teacher_role = request.user.get("role")
+
+        if teacher_role not in ["lecturer", "seminarist"]:
+            response_data = {"error": "Access denied", "status": 403}
+            return make_response(
+                json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+                403,
+                {'Content-Type': 'application/json; charset=utf-8'}
+            )
+
+        data = request.get_json()
+        if not data or "content" not in data:
+            response_data = {"error": "Content is required", "status": 400}
+            return make_response(
+                json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+                400,
+                {'Content-Type': 'application/json; charset=utf-8'}
+            )
+
+        result = service.update_unit_content(teacher_id, teacher_role, unit_id, data["content"])
+        return make_response(
+            json.dumps(result, ensure_ascii=False, indent=2, sort_keys=False),
+            result.get("status", 200),
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
+
+    except Exception as e:
+        print(f"Error: {e}")
+        response_data = {
+            "error": "Internal server error",
+            "status": 500
+        }
+        return make_response(
+            json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+            500,
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
+
+
+@app.route("/tests", methods=["POST"])
+@token_required
+def create_test():
+    try:
+        service = CourseService()
+        user_id = request.user.get("user_id")
+        user_role = request.user.get("role")
+
+        if user_role not in ["lecturer", "seminarist"]:
+            response_data = {"error": "Access denied", "status": 403}
+            return make_response(
+                json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+                403,
+                {'Content-Type': 'application/json; charset=utf-8'}
+            )
+
+        data = request.get_json()
+        if not data or "questions" not in data or "answers" not in data:
+            response_data = {"error": "Questions and answers are required", "status": 400}
+            return make_response(
+                json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+                400,
+                {'Content-Type': 'application/json; charset=utf-8'}
+            )
+
+        result = service.create_test(
+            questions=data["questions"],
+            answers=data["answers"],
+            deadline=data.get("deadline")
+        )
+
+        return make_response(
+            json.dumps(result, ensure_ascii=False, indent=2, sort_keys=False),
+            result.get("status", 201),
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
+
+    except Exception as e:
+        print(f"Error: {e}")
+        response_data = {
+            "error": "Internal server error",
+            "status": 500
+        }
+        return make_response(
+            json.dumps(response_data, ensure_ascii=False, indent=2, sort_keys=False),
+            500,
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
 
 
 if __name__ == "__main__":

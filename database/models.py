@@ -1,6 +1,8 @@
 from sqlalchemy import Column, String, ForeignKey, Text, TIMESTAMP, PrimaryKeyConstraint, Integer, UniqueConstraint
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.sql import func
+from datetime import datetime
+from sqlalchemy import Column, String, Text, DateTime
 
 Base = declarative_base()
 
@@ -128,6 +130,7 @@ class Test(Base):
     test_id = Column(String, primary_key=True)
     questions = Column(Text, nullable=False)
     answers = Column(Text, nullable=False)
+    deadline = Column(DateTime, nullable=True)
 
     results = relationship("TestResult", back_populates="test")
 
@@ -135,14 +138,9 @@ class Test(Base):
 class TestResult(Base):
     __tablename__ = 'test_results'
 
-    result_id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String, ForeignKey('users.user_id'), nullable=False)
-    test_id = Column(String, ForeignKey('tests.test_id'), nullable=False)
+    user_id = Column(String, ForeignKey('users.user_id'), primary_key=True)
+    test_id = Column(String, ForeignKey('tests.test_id'), primary_key=True)
     results = Column(Text, nullable=False)
 
     user = relationship("User")
     test = relationship("Test", back_populates="results")
-
-    __table_args__ = (
-        UniqueConstraint('user_id', 'test_id', name='_user_test_uc'),
-    )

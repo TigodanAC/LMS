@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from database.models import Course, Group, User, Block, Unit, Set, SetBlock, Test, TestResult
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Union
 from datetime import datetime, timedelta
 from flask import json
 from collections import OrderedDict
@@ -516,35 +516,57 @@ class CourseQueries:
         if existing_result:
             return {"error": "Test already completed", "status": 400}
 
+        if test.deadline and datetime.now() > test.deadline:
+            return {
+                "error": f"The test deadline has expired {test.deadline.strftime('%Y-%m-%d %H:%M:%S')}",
+                "status": 400
+            }
+
         try:
+            test_data = json.loads(test.questions)
             correct_answers = json.loads(test.answers)
         except (ValueError, TypeError):
-            return {"error": "Invalid test answers format", "status": 500}
+            return {"error": "Invalid test data format", "status": 500}
 
-        correct_answers_dict = {str(item['id']): set(item['answer']) for item in correct_answers}
+        question_types = {str(item['id']): item['type'] for item in test_data}
+
+        correct_answers_dict = {
+            str(item['id']): set(item['answer'])
+            for item in correct_answers
+            if question_types.get(str(item['id'])) != 'custom'
+        }
 
         results = []
         for user_answer in user_answers:
             question_id = str(user_answer['id'])
-            user_answer_set = set(user_answer.get('answer', []))
-            correct_answer_set = correct_answers_dict.get(question_id, set())
-            is_right = user_answer_set == correct_answer_set
+            question_type = question_types.get(question_id)
 
-            results.append({
-                "id": int(question_id),
-                "is_right": is_right
-            })
+            if question_type == 'custom':
+                user_response = user_answer.get('answer', [''])[0] if user_answer.get('answer') else ''
+                results.append({
+                    "id": int(question_id),
+                    "is_right": user_response
+                })
+            else:
+                user_answer_set = set(user_answer.get('answer', []))
+                correct_answer_set = correct_answers_dict.get(question_id, set())
+                is_right = user_answer_set == correct_answer_set
+
+                results.append({
+                    "id": int(question_id),
+                    "is_right": is_right
+                })
 
         try:
             test_result = TestResult(
                 user_id=user_id,
                 test_id=test_id,
-                results=json.dumps(results, ensure_ascii=False)
+                results=json.dumps(results, ensure_ascii=False, indent=2)
             )
             self.db.add(test_result)
             self.db.commit()
 
-            return {"data": results, "status": 201}
+            return results
 
         except Exception as e:
             self.db.rollback()
@@ -597,8 +619,213 @@ class CourseQueries:
                 formatted_questions.append(ordered_question)
 
             return {
-                "data": formatted_questions,
+                "data": {
+                    "questions": formatted_questions,
+                    "deadline": test.deadline.isoformat() if test.deadline else None
+                },
                 "status": 200
             }
         except (ValueError, TypeError):
             return {"error": "Invalid questions format", "status": 500}
+
+    def verify_teacher_access(self, teacher_id: str, teacher_role: str, test_id: str) -> Optional[Dict]:
+        test = self.db.query(Test).filter(Test.test_id == test_id).first()
+        if not test:
+            return {"error": "Test not found", "status": 404}
+
+        unit = self.db.query(Unit).filter(
+            Unit.content.contains(test_id),
+            Unit.type == 'test'
+        ).first()
+
+        if not unit:
+            return {"error": "Course not found for this test", "status": 404}
+
+        course = self.db.query(Course).filter(Course.course_id == unit.course_id).first()
+        if not course:
+            return {"error": "Course not found", "status": 404}
+
+        if teacher_role == "lecturer" and course.lector_id != teacher_id:
+            return {"error": "Access denied - not your course", "status": 403}
+
+        if teacher_role == "seminarist":
+            seminarist_courses = self.db.query(Group.course_id).filter(
+                Group.seminarist_id == teacher_id
+            ).all()
+
+            if course.course_id not in [sc.course_id for sc in seminarist_courses]:
+                return {"error": "Access denied - not your course", "status": 403}
+
+        return None
+
+    def get_student_test_results(self, test_id: str, student_id: str) -> Union[Dict, List]:
+        test_result = self.db.query(TestResult).filter(
+            TestResult.test_id == test_id,
+            TestResult.user_id == student_id
+        ).first()
+
+        if not test_result:
+            return []
+
+        try:
+            return json.loads(test_result.results)
+        except (ValueError, TypeError):
+            return {"error": "Invalid test results format", "status": 500}
+
+    def check_user_exists(self, user_id: str) -> bool:
+        user = self.db.query(User).filter(User.user_id == user_id).first()
+        return user is not None
+
+    def update_test_results(self, test_id: str, user_id: str, results_data: List[Dict]) -> Dict:
+        test_result = self.db.query(TestResult).filter(
+            TestResult.test_id == test_id,
+            TestResult.user_id == user_id
+        ).first()
+
+        if not test_result:
+            return {"error": "Test results not found for this user", "status": 404}
+
+        try:
+            formatted_results = json.dumps(results_data, ensure_ascii=False, indent=2)
+            test_result.results = formatted_results
+            self.db.commit()
+            return {
+                "message": "Test results updated successfully",
+                "status": 200
+            }
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error updating test results: {e}")
+            return {
+                "error": "Failed to update test results",
+                "status": 500
+            }
+
+    def get_unit(self, unit_id: int) -> Optional[Unit]:
+        return self.db.query(Unit).filter(Unit.unit_id == unit_id).first()
+
+    def verify_teacher_access_to_course(self, teacher_id: str, teacher_role: str,
+                                        course_id: str) -> Optional[Dict]:
+        course = self.db.query(Course).filter(Course.course_id == course_id).first()
+        if not course:
+            return {"error": "Course not found", "status": 404}
+
+        if teacher_role == "lecturer" and course.lector_id != teacher_id:
+            return {"error": "Access denied - not your course", "status": 403}
+
+        if teacher_role == "seminarist":
+            seminarist_courses = self.db.query(Group.course_id).filter(
+                Group.seminarist_id == teacher_id
+            ).all()
+            if course_id not in [sc.course_id for sc in seminarist_courses]:
+                return {"error": "Access denied - not your course", "status": 403}
+
+        return None
+
+    def update_unit_content(self, unit_id: int, new_content: Union[str, dict]) -> Dict:
+        unit = self.db.query(Unit).filter(Unit.unit_id == unit_id).first()
+        if not unit:
+            return {"error": "Unit not found", "status": 404}
+
+        try:
+            if unit.type == "test":
+                unit.content = json.dumps(new_content, ensure_ascii=False)
+            else:
+                unit.content = str(new_content)
+
+            self.db.commit()
+
+            return {
+                "message": "Unit content updated successfully",
+                "status": 200,
+                "unit_id": unit_id,
+                "course_id": unit.course_id,
+                "type": unit.type
+            }
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error updating unit content: {e}")
+            return {
+                "error": "Failed to update unit content",
+                "status": 500
+            }
+
+    def generate_test_id(self) -> str:
+        existing_ids = [r[0] for r in self.db.query(Test.test_id).all()]
+        numbers = []
+
+        for test_id in existing_ids:
+            if test_id.startswith('test'):
+                try:
+                    numbers.append(int(test_id[4:]))
+                except ValueError:
+                    continue
+
+        if numbers:
+            max_num = max(numbers)
+            all_numbers = set(range(1, max_num + 1))
+            existing_numbers = set(numbers)
+            missing_numbers = all_numbers - existing_numbers
+            if missing_numbers:
+                return f"test{min(missing_numbers)}"
+            return f"test{max_num + 1}"
+        return "test1"
+
+    def create_test(self, test_id: str, questions: List[Dict], answers: List[Dict],
+                    deadline: Optional[str] = None) -> Dict:
+        try:
+            def order_question_fields(q):
+                return {
+                    "id": q["id"],
+                    "text": q["text"],
+                    "type": q["type"],
+                    "answers": q["answers"]
+                }
+
+            def order_answer_fields(a):
+                return {
+                    "id": a["id"],
+                    "answer": a["answer"]
+                }
+
+            ordered_questions = [order_question_fields(q) for q in questions]
+            ordered_answers = [order_answer_fields(a) for a in answers]
+
+            questions_json = json.dumps(
+                ordered_questions,
+                ensure_ascii=False,
+                indent=None,
+                separators=(',', ':'),
+                sort_keys=False
+            )
+
+            answers_json = json.dumps(
+                ordered_answers,
+                ensure_ascii=False,
+                indent=None,
+                separators=(',', ':'),
+                sort_keys=False
+            )
+
+            new_test = Test(
+                test_id=test_id,
+                questions=questions_json,
+                answers=answers_json,
+                deadline=datetime.strptime(deadline, '%Y-%m-%d %H:%M:%S') if deadline else None
+            )
+
+            self.db.add(new_test)
+            self.db.commit()
+
+            return {
+                "test_id": test_id,
+                "message": "Test created successfully",
+                "status": 201
+            }
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error creating test: {e}")
+            return {
+                "error": "Failed to create test",
+                "status": 500
+            }

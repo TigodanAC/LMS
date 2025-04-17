@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Union
 from database.session import SessionLocal
 from database.course_queries import CourseQueries
 
@@ -83,6 +83,47 @@ class CourseService:
 
     def get_test_or_results(self, user_id: str, test_id: str) -> Dict:
         return self.queries.get_test_or_results(user_id, test_id)
+
+    def get_student_test_results(self, teacher_id: str, teacher_role: str, test_id: str, student_id: str) -> Union[
+        Dict, List]:
+        access_error = self.queries.verify_teacher_access(teacher_id, teacher_role, test_id)
+        if access_error:
+            return access_error
+        return self.queries.get_student_test_results(test_id, student_id)
+
+    def check_user_exists(self, user_id: str) -> bool:
+        return self.queries.check_user_exists(user_id)
+
+    def update_student_test_results(self, teacher_id: str, teacher_role: str,
+                                 test_id: str, student_id: str, results_data: List[Dict]) -> Dict:
+        if not self.queries.check_user_exists(student_id):
+            return {"error": "User not found", "status": 404}
+        access_error = self.queries.verify_teacher_access(teacher_id, teacher_role, test_id)
+        if access_error:
+            return access_error
+        return self.queries.update_test_results(test_id, student_id, results_data)
+
+    def update_unit_content(self, teacher_id: str, teacher_role: str,
+                            unit_id: int, new_content: Union[str, dict]) -> Dict:
+        unit = self.queries.get_unit(unit_id)
+        if not unit:
+            return {"error": "Unit not found", "status": 404}
+
+        access_error = self.queries.verify_teacher_access_to_course(
+            teacher_id, teacher_role, unit.course_id
+        )
+        if access_error:
+            return access_error
+        return self.queries.update_unit_content(unit_id, new_content)
+
+    def create_test(self, questions: List[Dict], answers: List[Dict], deadline: Optional[str] = None) -> Dict:
+        new_test_id = self.queries.generate_test_id()
+        return self.queries.create_test(
+            test_id=new_test_id,
+            questions=questions,
+            answers=answers,
+            deadline=deadline
+        )
 
     def __del__(self):
         self.db.close()
