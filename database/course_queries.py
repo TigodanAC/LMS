@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, func, select
 from database.models import Course, Group, User, Block, Unit, Set, SetBlock, Test, TestResult
 from typing import List, Optional, Dict, Tuple, Union
 from datetime import datetime, timedelta
@@ -23,6 +23,128 @@ class CourseQueries:
             User.user_id == teacher_id
         ).first()
         return teacher.role if teacher else None
+
+    def _check_course_access(self, course_id: str, user_id: str) -> Dict[str, bool]:
+        return {
+            "is_lector": self.is_course_lector(course_id, user_id),
+            "is_seminarist": self.is_course_seminarist(course_id, user_id)
+        }
+
+    def is_course_lector(self, course_id: str, user_id: str) -> bool:
+        return self.db.query(Course).filter(
+            Course.course_id == course_id,
+            Course.lector_id == user_id
+        ).first() is not None
+
+    def is_course_seminarist(self, course_id: str, user_id: str) -> bool:
+        return self.db.query(Group).filter(
+            Group.course_id == course_id,
+            Group.seminarist_id == user_id
+        ).first() is not None
+
+    def is_course_lector_or_seminarist(self, course_id: str, user_id: str) -> bool:
+        access = self._check_course_access(course_id, user_id)
+        return access["is_lector"] or access["is_seminarist"]
+
+    def is_block_lector_or_seminarist(self, block_id: str, user_id: str) -> bool:
+        block = self.get_query_block(block_id)
+        if not block:
+            return False
+        return self.is_course_lector_or_seminarist(block.course_id, user_id)
+
+    def is_unit_lector_or_seminarist(self, unit_id: int, user_id: str) -> bool:
+        unit = self.db.query(Unit).filter(Unit.unit_id == unit_id).first()
+        if not unit:
+            return False
+        return self.is_course_lector_or_seminarist(unit.course_id, user_id)
+
+    def verify_teacher_access(self, teacher_id: str, teacher_role: str, test_id: str) -> Optional[Dict]:
+        test = self.db.query(Test).filter(Test.test_id == test_id).first()
+        if not test:
+            return {"error": "Test not found", "status": 404}
+
+        unit = self.db.query(Unit).filter(
+            Unit.content.contains(test_id),
+            Unit.type == 'test'
+        ).first()
+
+        if not unit:
+            return {"error": "Course not found for this test", "status": 404}
+
+        if teacher_role == "teacher":
+            access = self._check_course_access(unit.course_id, teacher_id)
+            if not (access["is_lector"] or access["is_seminarist"]):
+                return {"error": "Access denied - not your course", "status": 403}
+
+        return None
+
+    def get_course(self, course_id: str):
+        return self.db.query(Course).filter(Course.course_id == course_id).first()
+
+    def check_test_access(self, user_id: str, user_role: str, test_id: str) -> bool:
+        user = self.db.query(User).filter(User.user_id == user_id).first()
+        if not user:
+            return False
+
+        if user_role == "admin":
+            return True
+
+        unit = self.db.query(Unit).filter(
+            Unit.type == "test",
+            Unit.content.like(f'%"test_id": "{test_id}"%')
+        ).first()
+        if not unit:
+            return False
+
+        if user_role == "teacher":
+            is_lecturer = self.db.query(Course).filter(
+                Course.course_id == unit.course_id,
+                Course.lector_id == user_id
+            ).first()
+
+            is_seminarist = self.db.query(Group).filter(
+                Group.course_id == unit.course_id,
+                Group.seminarist_id == user_id
+            ).first()
+
+            return is_lecturer is not None or is_seminarist is not None
+
+        if user_role == "student" and user.group_id:
+            group = self.db.query(Group).filter(
+                Group.group_id == user.group_id,
+                Group.course_id == unit.course_id
+            ).first()
+            return group is not None
+
+        return False
+
+    def is_block_accessible_to_student(self, block_id: str, user_id: str) -> bool:
+        student = self.db.query(User).filter(User.user_id == user_id).first()
+        if not student or not student.group_id:
+            return False
+
+        block = self.db.query(Block).filter(Block.block_id == block_id).first()
+        if not block:
+            return False
+
+        return self.db.query(Group).filter(
+            Group.group_id == student.group_id,
+            Group.course_id == block.course_id
+        ).first() is not None
+
+    def is_unit_accessible_to_student(self, unit_id: int, user_id: str) -> bool:
+        student = self.db.query(User).filter(User.user_id == user_id).first()
+        if not student or not student.group_id:
+            return False
+
+        unit = self.db.query(Unit).filter(Unit.unit_id == unit_id).first()
+        if not unit:
+            return False
+
+        return self.db.query(Group).filter(
+            Group.group_id == student.group_id,
+            Group.course_id == unit.course_id
+        ).first() is not None
 
     def get_student_courses_info(
             self,
@@ -130,61 +252,126 @@ class CourseQueries:
 
         return course_list, total
 
-    def get_course_details(self, course_id: str, user_id: str) -> Optional[Dict]:
-        student = self.db.query(User).filter(User.user_id == user_id).first()
-        if not student or not student.group_id:
+    def get_course_details(self, course_id: str, user_id: str, user_role: str) -> Optional[Dict]:
+        if user_role == "teacher":
             return None
 
-        course = self.db.query(Course) \
-            .join(Group, Course.course_id == Group.course_id) \
-            .filter(Group.group_id == student.group_id,
-                    Course.course_id == course_id) \
-            .first()
+        if user_role == "admin":
+            course = self.db.query(Course).filter(Course.course_id == course_id).first()
+            if not course:
+                return None
 
-        if not course:
-            return None
-
-        lector = self.db.query(User) \
-            .filter(User.user_id == course.lector_id) \
-            .first()
-
-        blocks = self.db.query(Block).filter(Block.course_id == course_id).order_by(Block.block_id).all()
-        type_order = {'lecture': 0, 'seminar': 1, 'test': 2}
-
-        course_data = {
-            "course_id": str(course.course_id),
-            "name": course.name,
-            "description": course.description,
-            "lector": {
-                "lector_id": str(course.lector_id),
-                "first_name": lector.first_name if lector else None,
-                "last_name": lector.last_name if lector else None
-            },
-            "blocks": []
-        }
-
-        for block in blocks:
-            units = self.db.query(Unit) \
-                .filter(Unit.block_id == block.block_id,
-                        Unit.course_id == course_id) \
+            lector = self.db.query(User).filter(User.user_id == course.lector_id).first()
+            seminarists = self.db.query(User).join(Group, User.user_id == Group.seminarist_id) \
+                .filter(Group.course_id == course_id) \
+                .distinct() \
                 .all()
 
-            sorted_units = sorted(units, key=lambda u: (type_order[u.type], u.name))
+            blocks = self.db.query(Block).filter(Block.course_id == course_id).order_by(Block.block_id).all()
+            type_order = {'lecture': 0, 'seminar': 1, 'test': 2}
 
-            block_data = {
-                "block_id": str(block.block_id),
-                "name": block.name,
-                "units": [{
-                    "unit_id": f"{unit.block_id}_{unit.course_id}",
-                    "name": unit.name,
-                    "type": unit.type
-                } for unit in sorted_units]
+            course_data = {
+                "course_id": str(course.course_id),
+                "name": course.name,
+                "description": course.description,
+                "lector": {
+                    "lector_id": str(course.lector_id),
+                    "first_name": lector.first_name if lector else None,
+                    "last_name": lector.last_name if lector else None
+                },
+                "seminarists": [
+                    {
+                        "seminarist_id": str(seminarist.user_id),
+                        "first_name": seminarist.first_name,
+                        "last_name": seminarist.last_name
+                    } for seminarist in seminarists
+                ],
+                "blocks": []
             }
-            course_data["blocks"].append(block_data)
 
-        return course_data
+            for block in blocks:
+                units = self.db.query(Unit) \
+                    .filter(Unit.block_id == block.block_id,
+                            Unit.course_id == course_id) \
+                    .all()
 
-    def submit_sop(self, user_id: str, sop_data: List[Dict]) -> Dict:
+                sorted_units = sorted(units, key=lambda u: (type_order[u.type], u.name))
+
+                block_data = {
+                    "block_id": str(block.block_id),
+                    "name": block.name,
+                    "units": [{
+                        "unit_id": str(unit.unit_id),
+                        "name": unit.name,
+                        "type": unit.type
+                    } for unit in sorted_units]
+                }
+                course_data["blocks"].append(block_data)
+
+            return course_data
+
+        elif user_role == "student":
+            student = self.db.query(User).filter(User.user_id == user_id).first()
+            if not student or not student.group_id:
+                return None
+
+            course = self.db.query(Course) \
+                .join(Group, Course.course_id == Group.course_id) \
+                .filter(Group.group_id == student.group_id,
+                        Course.course_id == course_id) \
+                .first()
+
+            if not course:
+                return None
+
+            lector = self.db.query(User).filter(User.user_id == course.lector_id).first()
+            seminarist = self.db.query(User).join(Group, User.user_id == Group.seminarist_id) \
+                .filter(Group.group_id == student.group_id) \
+                .first()
+
+            blocks = self.db.query(Block).filter(Block.course_id == course_id).order_by(Block.block_id).all()
+            type_order = {'lecture': 0, 'seminar': 1, 'test': 2}
+
+            course_data = {
+                "course_id": str(course.course_id),
+                "name": course.name,
+                "description": course.description,
+                "lector": {
+                    "lector_id": str(course.lector_id),
+                    "first_name": lector.first_name if lector else None,
+                    "last_name": lector.last_name if lector else None
+                },
+                "seminarist": {
+                    "seminarist_id": str(seminarist.user_id) if seminarist else None,
+                    "first_name": seminarist.first_name if seminarist else None,
+                    "last_name": seminarist.last_name if seminarist else None
+                },
+                "blocks": []
+            }
+
+            for block in blocks:
+                units = self.db.query(Unit) \
+                    .filter(Unit.block_id == block.block_id,
+                            Unit.course_id == course_id) \
+                    .all()
+
+                sorted_units = sorted(units, key=lambda u: (type_order[u.type], u.name))
+
+                block_data = {
+                    "block_id": str(block.block_id),
+                    "name": block.name,
+                    "units": [{
+                        "unit_id": str(unit.unit_id),
+                        "name": unit.name,
+                        "type": unit.type
+                    } for unit in sorted_units]
+                }
+                course_data["blocks"].append(block_data)
+
+            return course_data
+        return None
+
+    def submit_sop(self, user_id: str, courses_data: List[Dict]) -> Dict:
         last_submission = self.db.query(Set) \
             .filter(Set.user_id == user_id) \
             .order_by(Set.creation_time.desc()) \
@@ -215,14 +402,26 @@ class CourseQueries:
             self.db.add(new_set)
             self.db.flush()
 
-            for course_data in sop_data:
-                course_id = course_data["course_id"]
-                blocks = course_data["blocks"]
+            for course in courses_data:
+                course_id = course["course_id"]
+                blocks = course["blocks"]
 
                 for block in blocks:
                     content = OrderedDict()
                     content["teacher_id"] = block.get("teacher_id")
-                    content["questions_answers"] = block.get("questions_answers", [])
+                    content["questions_answers"] = []
+
+                    for question in block["questions_answers"]:
+                        q_data = {
+                            "question": question["question"],
+                            "type": question["question_type"]
+                        }
+                        if question["question_type"] == "rating":
+                            q_data["answer"] = question["answer"]
+                        else:
+                            q_data["text_answer"] = question["text_answer"]
+
+                        content["questions_answers"].append(q_data)
 
                     set_block = SetBlock(
                         set_id=new_set.set_id,
@@ -248,17 +447,16 @@ class CourseQueries:
             }
 
     def get_teacher_sop_results(self, teacher_id: str, user_role: str) -> Dict:
-        if user_role not in ["lecturer", "seminarist"]:
+        if user_role != "teacher":
             return {
-                "error": "Only lecturers and seminarists can view teacher SOP results",
+                "error": "Only teachers can view teacher SOP results",
                 "status": 403
             }
 
-        block_type = "lecturer" if user_role == "lecturer" else "seminarist"
         sop_blocks = self.db.query(SetBlock) \
             .filter(
-            SetBlock.type == block_type,
-            SetBlock.content.like(f'%"teacher_id": "{teacher_id}"%')
+            SetBlock.content.like(f'%"teacher_id": "{teacher_id}"%'),
+            SetBlock.type.in_(["lecturer", "seminarist"])
         ) \
             .all()
 
@@ -268,53 +466,84 @@ class CourseQueries:
                 "status": 404
             }
 
-        question_stats = {}
+        course_results = {}
+        text_comments = {}
 
         for block in sop_blocks:
             try:
-                content = eval(block.content)
+                content = json.loads(block.content)
                 qa_pairs = content.get("questions_answers", [])
+                course_id = block.course_id
+
+                if course_id not in course_results:
+                    course_results[course_id] = {
+                        "course_id": course_id,
+                        "teaching_type": block.type,
+                        "questions": {},
+                        "text_comments": []
+                    }
 
                 for qa in qa_pairs:
                     question = qa["question"]
-                    answer = qa["answer"]
+                    q_type = qa["type"]
 
-                    if question not in question_stats:
-                        question_stats[question] = {}
+                    if q_type == "rating":
+                        answer = qa["answer"]
+                        if question not in course_results[course_id]["questions"]:
+                            course_results[course_id]["questions"][question] = {}
 
-                    if answer not in question_stats[question]:
-                        question_stats[question][answer] = 0
+                        if answer not in course_results[course_id]["questions"][question]:
+                            course_results[course_id]["questions"][question][answer] = 0
 
-                    question_stats[question][answer] += 1
-            except:
+                        course_results[course_id]["questions"][question][answer] += 1
+                    elif q_type == "text":
+                        text_answer = qa["text_answer"]
+                        course_results[course_id]["text_comments"].append({
+                            "question": question,
+                            "answer": text_answer
+                        })
+
+            except Exception as e:
+                print(f"Error processing block {block.set_id}: {e}")
                 continue
 
-        results = []
-        for question, answers in question_stats.items():
-            answer_distribution = []
-            for answer, count in sorted(answers.items()):
-                answer_distribution.append({
-                    "answer": answer,
-                    "count": count
+        formatted_results = []
+        for course_id, course_data in course_results.items():
+            questions_list = []
+
+            for question, answers in course_data["questions"].items():
+                answer_distribution = []
+                for answer, count in sorted(answers.items()):
+                    answer_distribution.append({
+                        "answer": answer,
+                        "count": count
+                    })
+
+                questions_list.append({
+                    "question": question,
+                    "answers": answer_distribution
                 })
-            question_data = OrderedDict()
-            question_data["question"] = question
-            question_data["answers"] = answer_distribution
-            results.append(question_data)
+
+            formatted_results.append({
+                "course_id": course_id,
+                "teaching_type": course_data["teaching_type"],
+                "questions": questions_list,
+                "text_comments": course_data["text_comments"]
+            })
 
         return {
-            "data": results,
+            "data": formatted_results,
             "status": 200
         }
 
     def get_course_sop_results(self, course_id: str, current_user_id: str, current_user_role: str) -> Dict:
-        if current_user_role not in ["lecturer", "admin"]:
+        if current_user_role not in ["teacher", "admin"]:
             return {
-                "error": "Only lecturers and admins can view course SOP results",
+                "error": "Only course lecturers and admins can view course SOP results",
                 "status": 403
             }
 
-        if current_user_role == "lecturer":
+        if current_user_role == "teacher":
             course = self.db.query(Course) \
                 .filter(
                 Course.course_id == course_id,
@@ -323,7 +552,7 @@ class CourseQueries:
                 .first()
             if not course:
                 return {
-                    "error": "You can only view SOP for your own courses",
+                    "error": "You can only view SOP for courses where you are the lecturer",
                     "status": 403
                 }
 
@@ -338,15 +567,17 @@ class CourseQueries:
             }
 
         lector = self.db.query(User).filter(User.user_id == course.lector_id).first()
-
         course_block_results = self._get_block_results(course_id, "course")
         lector_results = self._get_block_results(course_id, "lecturer", course.lector_id)
+        course_text_comments = self._get_text_comments(course_id, "course")
+        lector_text_comments = self._get_text_comments(course_id, "lecturer", course.lector_id)
 
         lector_data = {
             "lector_id": str(course.lector_id),
             "first_name": lector.first_name if lector else "",
             "last_name": lector.last_name if lector else "",
-            "results": lector_results
+            "results": lector_results,
+            "text_comments": lector_text_comments
         }
 
         seminarists = self.db.query(User) \
@@ -357,20 +588,21 @@ class CourseQueries:
         seminarists_results = []
         for seminarist in seminarists:
             results = self._get_block_results(course_id, "seminarist", seminarist.user_id)
+            text_comments = self._get_text_comments(course_id, "seminarist", seminarist.user_id)
             seminarists_results.append({
                 "seminarist_id": str(seminarist.user_id),
                 "first_name": seminarist.first_name,
                 "last_name": seminarist.last_name,
-                "results": results
+                "results": results,
+                "text_comments": text_comments
             })
 
         return {
             "data": {
-                "course": {
-                    "course_results": course_block_results,
-                    "lector": lector_data,
-                    "seminarists": seminarists_results
-                }
+                "course_results": course_block_results,
+                "course_text_comments": course_text_comments,
+                "lector": lector_data,
+                "seminarists": seminarists_results
             },
             "status": 200
         }
@@ -382,45 +614,64 @@ class CourseQueries:
             SetBlock.type == block_type
         )
 
-        if block_type in ["lecturer", "seminarist"] and teacher_id:
+        if teacher_id:
             query = query.filter(SetBlock.content.like(f'%"teacher_id": "{teacher_id}"%'))
 
         blocks = query.all()
-        question_stats = {}
+        results = {}
 
         for block in blocks:
             try:
-                content = eval(block.content)
-                qa_pairs = content.get("questions_answers", [])
+                content = json.loads(block.content)
+                for qa in content.get("questions_answers", []):
+                    if qa.get("type") == "rating":
+                        question = qa["question"]
+                        answer = qa["answer"]
 
-                for qa in qa_pairs:
-                    question = qa["question"]
-                    answer = qa["answer"]
-
-                    if question not in question_stats:
-                        question_stats[question] = {}
-
-                    if answer not in question_stats[question]:
-                        question_stats[question][answer] = 0
-
-                    question_stats[question][answer] += 1
+                        if question not in results:
+                            results[question] = {}
+                        if answer not in results[question]:
+                            results[question][answer] = 0
+                        results[question][answer] += 1
             except:
                 continue
 
-        results = []
-        for question, answers in question_stats.items():
-            answer_distribution = []
-            for answer, count in sorted(answers.items()):
-                answer_distribution.append({
-                    "answer": answer,
-                    "count": count
-                })
-            results.append({
+        formatted_results = []
+        for question, answers in results.items():
+            answer_distribution = [{"answer": a, "count": c} for a, c in sorted(answers.items())]
+            formatted_results.append({
                 "question": question,
                 "answers": answer_distribution
             })
 
-        return results
+        return formatted_results
+
+    def _get_text_comments(self, course_id: str, block_type: str, teacher_id: str = None) -> List[Dict]:
+        query = self.db.query(SetBlock) \
+            .filter(
+            SetBlock.course_id == course_id,
+            SetBlock.type == block_type
+        )
+
+        if teacher_id:
+            query = query.filter(SetBlock.content.like(f'%"teacher_id": "{teacher_id}"%'))
+
+        blocks = query.all()
+        text_comments = []
+
+        for block in blocks:
+            try:
+                content = json.loads(block.content)
+                for qa in content.get("questions_answers", []):
+                    if qa.get("type") == "text":
+                        text_comments.append({
+                            "question": qa["question"],
+                            "answer": qa["text_answer"]
+                        })
+            except:
+                continue
+
+        return text_comments
 
     def get_unit_by_id(self, unit_id: int, user_id: str) -> Optional[Dict]:
         user = self.db.query(User).filter(User.user_id == user_id).first()
@@ -434,19 +685,18 @@ class CourseQueries:
         if user.role == "admin":
             return self._format_unit_response(unit)
 
-        if user.role in ["lecturer", "seminarist"]:
-            if user.role == "lecturer":
-                has_access = self.db.query(Course).filter(
-                    Course.course_id == unit.course_id,
-                    Course.lector_id == user_id
-                ).first()
-            else:
-                has_access = self.db.query(Group).filter(
-                    Group.course_id == unit.course_id,
-                    Group.seminarist_id == user_id
-                ).first()
+        if user.role == "teacher":
+            is_lecturer = self.db.query(Course).filter(
+                Course.course_id == unit.course_id,
+                Course.lector_id == user_id
+            ).first()
 
-            if has_access:
+            is_seminarist = self.db.query(Group).filter(
+                Group.course_id == unit.course_id,
+                Group.seminarist_id == user_id
+            ).first()
+
+            if is_lecturer or is_seminarist:
                 return self._format_unit_response(unit)
 
         if user.role == "student" and user.group_id:
@@ -465,44 +715,6 @@ class CourseQueries:
             ("type", unit.type),
             ("content", unit.content)
         ])
-
-    def check_test_access(self, user_id: str, user_role: str, test_id: str) -> bool:
-        user = self.db.query(User).filter(User.user_id == user_id).first()
-        if not user:
-            return False
-
-        if user_role == "admin":
-            return True
-
-        unit = self.db.query(Unit).filter(
-            Unit.type == "test",
-            Unit.content.like(f'%"test_id": "{test_id}"%')
-        ).first()
-        if not unit:
-            return False
-
-        if user_role == "lecturer":
-            course = self.db.query(Course).filter(
-                Course.course_id == unit.course_id,
-                Course.lector_id == user_id
-            ).first()
-            return course is not None
-
-        if user_role == "seminarist":
-            group = self.db.query(Group).filter(
-                Group.course_id == unit.course_id,
-                Group.seminarist_id == user_id
-            ).first()
-            return group is not None
-
-        if user_role == "student" and user.group_id:
-            group = self.db.query(Group).filter(
-                Group.group_id == user.group_id,
-                Group.course_id == unit.course_id
-            ).first()
-            return group is not None
-
-        return False
 
     def submit_test_results(self, user_id: str, test_id: str, user_answers: List[Dict]) -> Dict:
         test = self.db.query(Test).filter(Test.test_id == test_id).first()
@@ -621,42 +833,12 @@ class CourseQueries:
             return {
                 "data": {
                     "questions": formatted_questions,
-                    "deadline": test.deadline.isoformat() if test.deadline else None
+                    "deadline": test.deadline
                 },
                 "status": 200
             }
         except (ValueError, TypeError):
             return {"error": "Invalid questions format", "status": 500}
-
-    def verify_teacher_access(self, teacher_id: str, teacher_role: str, test_id: str) -> Optional[Dict]:
-        test = self.db.query(Test).filter(Test.test_id == test_id).first()
-        if not test:
-            return {"error": "Test not found", "status": 404}
-
-        unit = self.db.query(Unit).filter(
-            Unit.content.contains(test_id),
-            Unit.type == 'test'
-        ).first()
-
-        if not unit:
-            return {"error": "Course not found for this test", "status": 404}
-
-        course = self.db.query(Course).filter(Course.course_id == unit.course_id).first()
-        if not course:
-            return {"error": "Course not found", "status": 404}
-
-        if teacher_role == "lecturer" and course.lector_id != teacher_id:
-            return {"error": "Access denied - not your course", "status": 403}
-
-        if teacher_role == "seminarist":
-            seminarist_courses = self.db.query(Group.course_id).filter(
-                Group.seminarist_id == teacher_id
-            ).all()
-
-            if course.course_id not in [sc.course_id for sc in seminarist_courses]:
-                return {"error": "Access denied - not your course", "status": 403}
-
-        return None
 
     def get_student_test_results(self, test_id: str, student_id: str) -> Union[Dict, List]:
         test_result = self.db.query(TestResult).filter(
@@ -701,55 +883,6 @@ class CourseQueries:
                 "status": 500
             }
 
-    def get_unit(self, unit_id: int) -> Optional[Unit]:
-        return self.db.query(Unit).filter(Unit.unit_id == unit_id).first()
-
-    def verify_teacher_access_to_course(self, teacher_id: str, teacher_role: str,
-                                        course_id: str) -> Optional[Dict]:
-        course = self.db.query(Course).filter(Course.course_id == course_id).first()
-        if not course:
-            return {"error": "Course not found", "status": 404}
-
-        if teacher_role == "lecturer" and course.lector_id != teacher_id:
-            return {"error": "Access denied - not your course", "status": 403}
-
-        if teacher_role == "seminarist":
-            seminarist_courses = self.db.query(Group.course_id).filter(
-                Group.seminarist_id == teacher_id
-            ).all()
-            if course_id not in [sc.course_id for sc in seminarist_courses]:
-                return {"error": "Access denied - not your course", "status": 403}
-
-        return None
-
-    def update_unit_content(self, unit_id: int, new_content: Union[str, dict]) -> Dict:
-        unit = self.db.query(Unit).filter(Unit.unit_id == unit_id).first()
-        if not unit:
-            return {"error": "Unit not found", "status": 404}
-
-        try:
-            if unit.type == "test":
-                unit.content = json.dumps(new_content, ensure_ascii=False)
-            else:
-                unit.content = str(new_content)
-
-            self.db.commit()
-
-            return {
-                "message": "Unit content updated successfully",
-                "status": 200,
-                "unit_id": unit_id,
-                "course_id": unit.course_id,
-                "type": unit.type
-            }
-        except Exception as e:
-            self.db.rollback()
-            print(f"Error updating unit content: {e}")
-            return {
-                "error": "Failed to update unit content",
-                "status": 500
-            }
-
     def generate_test_id(self) -> str:
         existing_ids = [r[0] for r in self.db.query(Test.test_id).all()]
         numbers = []
@@ -772,14 +905,14 @@ class CourseQueries:
         return "test1"
 
     def create_test(self, test_id: str, questions: List[Dict], answers: List[Dict],
-                    deadline: Optional[str] = None) -> Dict:
+                    deadline: Optional[datetime] = None) -> Dict:
         try:
             def order_question_fields(q):
                 return {
                     "id": q["id"],
                     "text": q["text"],
                     "type": q["type"],
-                    "answers": q["answers"]
+                    "answers": q.get("answers", [])
                 }
 
             def order_answer_fields(a):
@@ -811,7 +944,7 @@ class CourseQueries:
                 test_id=test_id,
                 questions=questions_json,
                 answers=answers_json,
-                deadline=datetime.strptime(deadline, '%Y-%m-%d %H:%M:%S') if deadline else None
+                deadline=deadline
             )
 
             self.db.add(new_test)
@@ -829,3 +962,336 @@ class CourseQueries:
                 "error": "Failed to create test",
                 "status": 500
             }
+
+    def get_user_by_id(self, user_id: str) -> Optional[User]:
+        return self.db.query(User).filter(User.user_id == user_id).first()
+
+    def generate_course_id(self) -> str:
+        existing_ids = [course.course_id for course in self.db.query(Course.course_id).all()]
+
+        max_num = 0
+        for course_id in existing_ids:
+            if course_id.startswith('COURSE'):
+                try:
+                    num = int(course_id[6:])
+                    if num > max_num:
+                        max_num = num
+                except ValueError:
+                    continue
+
+        return f"COURSE{max_num + 1:03d}"
+
+    def create_course(self, course_id: str, name: str, description: str, lector_id: str, groups: List[Dict]) -> Dict:
+        try:
+            new_course = Course(
+                course_id=course_id,
+                name=name,
+                description=description,
+                lector_id=lector_id
+            )
+            self.db.add(new_course)
+
+            for group in groups:
+                new_group = Group(
+                    group_id=group['group_id'],
+                    course_id=course_id,
+                    seminarist_id=group['seminarist_id']
+                )
+                self.db.add(new_group)
+
+            self.db.commit()
+
+            return {
+                "course_id": course_id,
+                "status": 201
+            }
+
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error creating course: {e}")
+            return {
+                "error": "Database error while creating course",
+                "status": 500
+            }
+
+    def update_course(self, course_id: str, user_role: str, update_data: Dict) -> Dict:
+        course = self.db.query(Course).filter(Course.course_id == course_id).first()
+        if not course:
+            return {"error": "Course not found", "status": 404}
+
+        try:
+            if 'name' in update_data:
+                course.name = update_data['name']
+            if 'description' in update_data:
+                course.description = update_data['description']
+
+            if 'lector_id' in update_data and user_role == "admin":
+                course.lector_id = update_data['lector_id']
+
+            if 'groups' in update_data:
+                self.db.query(Group).filter(Group.course_id == course_id).delete()
+                for group in update_data['groups']:
+                    new_group = Group(
+                        group_id=group['group_id'],
+                        course_id=course_id,
+                        seminarist_id=group['seminarist_id']
+                    )
+                    self.db.add(new_group)
+
+            self.db.commit()
+
+            return {
+                "message": "Course has been successfully updated.",
+                "status": 200
+            }
+
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error updating course: {e}")
+            return {"error": "Database error while updating course", "status": 500}
+
+    def get_course_by_id(self, course_id: str) -> Optional[Course]:
+        return self.db.query(Course).filter(Course.course_id == course_id).first()
+
+    def generate_block_id(self, course_id: str) -> str:
+        existing_blocks = self.db.query(Block.block_id) \
+            .filter(Block.course_id == course_id) \
+            .all()
+
+        max_num = 0
+        for block_id, in existing_blocks:
+            if block_id.startswith('block') and '_' in block_id:
+                try:
+                    num_part = block_id.split('_')[0][5:]
+                    num = int(num_part)
+                    if num > max_num:
+                        max_num = num
+                except ValueError:
+                    continue
+
+        return f"block{max_num + 1}_{course_id.lower()}"
+
+    def create_block(self, block_id: str, course_id: str, name: str) -> Dict:
+        try:
+            new_block = Block(
+                block_id=block_id,
+                course_id=course_id,
+                name=name
+            )
+            self.db.add(new_block)
+            self.db.commit()
+
+            return {
+                "block_id": block_id,
+                "status": 201
+            }
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error creating block: {e}")
+            return {
+                "error": "Database error while creating block",
+                "status": 500
+            }
+
+    def get_block(self, block_id: str) -> Dict:
+        block = self.db.query(Block).filter(Block.block_id == block_id).first()
+        if not block:
+            return {"error": "Block not found", "status": 404}
+
+        units = self.db.query(Unit).filter(
+            Unit.block_id == block_id,
+            Unit.course_id == block.course_id
+        ).all()
+
+        units_data = []
+        for unit in units:
+            units_data.append(unit.unit_id)
+
+        return {
+            "block_id": block.block_id,
+            "course_id": block.course_id,
+            "name": block.name,
+            "units": units_data,
+            "status": 200
+        }
+
+    def is_student_in_course(self, course_id: str, student_id: str) -> bool:
+        student = self.db.query(User).filter(
+            User.user_id == student_id,
+            User.role == 'student'
+        ).first()
+
+        if not student or not student.group_id:
+            return False
+
+        return self.db.query(Group).filter(
+            Group.group_id == student.group_id,
+            Group.course_id == course_id
+        ).first() is not None
+
+    def get_query_block(self, block_id: str):
+        return self.db.query(Block).filter(Block.block_id == block_id).first()
+
+    def update_block(self, block_id: str, name: str) -> Dict:
+        block = self.db.query(Block).filter(Block.block_id == block_id).first()
+        if not block:
+            return {"error": "Block not found", "status": 404}
+
+        try:
+            block.name = name
+            self.db.commit()
+
+            return {
+                "message": "Block has been updated successfully",
+                "status": 200
+            }
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error updating block: {e}")
+            return {
+                "error": "Database error while updating block",
+                "status": 500
+            }
+
+    def create_unit(self, block_id: str, course_id: str, name: str, unit_type: str, content: Union[str, dict]) -> Dict:
+        try:
+            max_id = self.db.query(func.max(Unit.unit_id)).scalar() or 0
+            new_unit_id = max_id + 1
+
+            if unit_type == "test":
+                if isinstance(content, str):
+                    try:
+                        content = json.loads(content)
+                    except json.JSONDecodeError:
+                        raise ValueError("For test units, content must be a valid JSON string with 'test_id'")
+                formatted_content = json.dumps(content, ensure_ascii=False) if isinstance(content, dict) else content
+            else:
+                formatted_content = str(content) if not isinstance(content, str) else content
+
+            new_unit = Unit(
+                unit_id=new_unit_id,
+                block_id=block_id,
+                course_id=course_id,
+                name=name,
+                type=unit_type,
+                content=formatted_content
+            )
+            self.db.add(new_unit)
+            self.db.commit()
+
+            return {
+                "unit_id": new_unit_id,
+                "status": 201
+            }
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error creating unit: {e}")
+            return {
+                "error": str(e),
+                "status": 500
+            }
+
+    def update_unit(self, unit_id: int, update_data: Dict) -> Dict:
+        unit = self.db.query(Unit).filter(Unit.unit_id == unit_id).first()
+        if not unit:
+            return {"error": "Unit not found", "status": 404}
+
+        try:
+            if 'name' in update_data:
+                unit.name = update_data['name']
+
+            if 'type' in update_data:
+                unit.type = update_data['type']
+
+            if 'content' in update_data:
+                if unit.type == "test" and isinstance(update_data['content'], dict):
+                    unit.content = json.dumps(update_data['content'], ensure_ascii=False)
+                else:
+                    unit.content = str(update_data['content'])
+
+            self.db.commit()
+
+            return {
+                "message": "Unit updated successfully",
+                "status": 200
+            }
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error updating unit: {e}")
+            return {
+                "error": "Database error while updating unit",
+                "status": 500
+            }
+
+    def get_course_students(
+            self,
+            course_id: str,
+            user_id: str,
+            user_role: str,
+            limit: int = 20,
+            offset: int = 0,
+            search: str = ''
+    ) -> Dict:
+        try:
+            if limit == 0:
+                return {
+                    "students": [],
+                    "total": 0,
+                    "status": 200
+                }
+
+            if user_role == "admin":
+                query = (self.db.query(User)
+                         .join(Group, User.group_id == Group.group_id)
+                         .filter(Group.course_id == course_id,
+                                 User.role == "student"))
+
+            elif user_role == "teacher":
+                if not self.is_course_lector_or_seminarist(course_id, user_id):
+                    return {"error": "Access denied - not your course", "status": 403}
+
+                if self.is_course_lector(course_id, user_id):
+                    query = (self.db.query(User)
+                             .join(Group, User.group_id == Group.group_id)
+                             .filter(Group.course_id == course_id,
+                                     User.role == "student"))
+                else:
+                    teacher_groups = select(Group.group_id).where(
+                        Group.course_id == course_id,
+                        Group.seminarist_id == user_id
+                    )
+                    query = (self.db.query(User)
+                             .filter(User.role == "student",
+                                     User.group_id.in_(teacher_groups)))
+            else:
+                return {"error": "Access denied", "status": 403}
+
+            if search.strip():
+                query = query.filter(
+                    or_(
+                        User.first_name.ilike(f"%{search}%"),
+                        User.last_name.ilike(f"%{search}%"),
+                        User.email.ilike(f"%{search}%")
+                    )
+                )
+
+            total = query.count()
+            students = query.order_by(User.last_name, User.first_name).offset(offset).limit(limit).all()
+
+            students_data = [{
+                "student_id": s.user_id,
+                "first_name": s.first_name,
+                "last_name": s.last_name,
+                "email": s.email,
+                "group_id": s.group_id
+            } for s in students]
+
+            return {
+                "students": students_data,
+                "total": total,
+                "status": 200
+            }
+
+        except Exception as e:
+            print(f"Error in get_course_students: {str(e)}")
+            return {"error": "Internal server error", "status": 500}

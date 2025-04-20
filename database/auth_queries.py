@@ -32,9 +32,15 @@ class AuthQueries:
             .filter(RefreshToken.token == normalized_token) \
             .first()
 
-    def delete_refresh_token(self, token: str):
-        normalized_token = token.replace('\n', '').strip()
-        self.db.query(RefreshToken) \
-            .filter(RefreshToken.token == normalized_token) \
-            .delete()
+    def delete_refresh_tokens(self, user_id: str = None, token: str = None):
+        query = self.db.query(RefreshToken)
+
+        if user_id:
+            query = query.filter(RefreshToken.user_id == user_id)
+
+        if token:
+            normalized_token = token.replace('\n', '').strip()
+            query = query.filter(RefreshToken.token != normalized_token)
+
+        query.delete()
         self.db.commit()

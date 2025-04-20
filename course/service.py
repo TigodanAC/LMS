@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Tuple, Union
 from database.session import SessionLocal
 from database.course_queries import CourseQueries
+from database.models import User
 
 
 class CourseService:
@@ -41,25 +42,38 @@ class CourseService:
             offset=offset
         )
 
-    def get_course_details(self, course_id: str, user_id: str) -> Optional[Dict]:
-        return self.queries.get_course_details(course_id, user_id)
+    def get_course(self, course_id: str):
+        return self.queries.get_course(course_id)
 
-    def submit_sop(self, user_id: str, sop_data: List[Dict]) -> Dict:
-        if not sop_data or not isinstance(sop_data, list):
+    def get_course_details(self, course_id: str, user_id: str) -> Optional[Dict]:
+        user = self.db.query(User).filter(User.user_id == user_id).first()
+        if not user:
+            return None
+
+        return self.queries.get_course_details(course_id, user_id, user.role)
+
+    def submit_sop(self, user_id: str, sop_data: Dict) -> Dict:
+        if not sop_data or "courses" not in sop_data:
             return {"error": "Invalid SOP data format", "status": 400}
 
-        for course_data in sop_data:
-            if "course_id" not in course_data or "blocks" not in course_data:
-                return {"error": "Missing required fields in SOP data", "status": 400}
+        for course in sop_data["courses"]:
+            if "course_id" not in course or "blocks" not in course:
+                return {"error": "Missing required fields in course data", "status": 400}
 
-            for block in course_data["blocks"]:
+            for block in course["blocks"]:
                 if "block_type" not in block or "questions_answers" not in block:
                     return {"error": "Missing required fields in block data", "status": 400}
 
                 if block["block_type"] in ["lecturer", "seminarist"] and "teacher_id" not in block:
                     return {"error": "Teacher ID required for this block type", "status": 400}
 
-        return self.queries.submit_sop(user_id, sop_data)
+                for question in block["questions_answers"]:
+                    if question["question_type"] == "rating" and "answer" not in question:
+                        return {"error": "Missing answer for rating question", "status": 400}
+                    elif question["question_type"] == "text" and "text_answer" not in question:
+                        return {"error": "Missing text answer for text question", "status": 400}
+
+        return self.queries.submit_sop(user_id, sop_data["courses"])
 
     def get_teacher_sop_results(self, teacher_id: str, user_role: str) -> Dict:
         return self.queries.get_teacher_sop_results(teacher_id, user_role)
@@ -95,7 +109,7 @@ class CourseService:
         return self.queries.check_user_exists(user_id)
 
     def update_student_test_results(self, teacher_id: str, teacher_role: str,
-                                 test_id: str, student_id: str, results_data: List[Dict]) -> Dict:
+                                    test_id: str, student_id: str, results_data: List[Dict]) -> Dict:
         if not self.queries.check_user_exists(student_id):
             return {"error": "User not found", "status": 404}
         access_error = self.queries.verify_teacher_access(teacher_id, teacher_role, test_id)
@@ -103,20 +117,7 @@ class CourseService:
             return access_error
         return self.queries.update_test_results(test_id, student_id, results_data)
 
-    def update_unit_content(self, teacher_id: str, teacher_role: str,
-                            unit_id: int, new_content: Union[str, dict]) -> Dict:
-        unit = self.queries.get_unit(unit_id)
-        if not unit:
-            return {"error": "Unit not found", "status": 404}
-
-        access_error = self.queries.verify_teacher_access_to_course(
-            teacher_id, teacher_role, unit.course_id
-        )
-        if access_error:
-            return access_error
-        return self.queries.update_unit_content(unit_id, new_content)
-
-    def create_test(self, questions: List[Dict], answers: List[Dict], deadline: Optional[str] = None) -> Dict:
+    def create_test(self, questions: List[Dict], answers: List[Dict], deadline: Optional[datetime] = None) -> Dict:
         new_test_id = self.queries.generate_test_id()
         return self.queries.create_test(
             test_id=new_test_id,
@@ -124,6 +125,180 @@ class CourseService:
             answers=answers,
             deadline=deadline
         )
+
+    def create_course(self, name: str, description: str, lector_id: str, groups: List[Dict]) -> Dict:
+        lecturer = self.queries.get_user_by_id(lector_id)
+        if not lecturer or lecturer.role != "teacher":
+            return {"error": "Invalid lecturer ID or not a teacher", "status": 400}
+
+        for group in groups:
+            if 'group_id' not in group or 'seminarist_id' not in group:
+                return {"error": "Each group must have group_id and seminarist_id", "status": 400}
+
+            seminarist = self.queries.get_user_by_id(group['seminarist_id'])
+            if not seminarist or seminarist.role != "teacher":
+                return {"error": f"Invalid seminarist ID {group['seminarist_id']} or not a teacher", "status": 400}
+
+        try:
+            course_id = self.queries.generate_course_id()
+            return self.queries.create_course(
+                course_id=course_id,
+                name=name,
+                description=description,
+                lector_id=lector_id,
+                groups=groups
+            )
+        except Exception as e:
+            print(f"Error creating course: {e}")
+            return {"error": "Failed to create course", "status": 500}
+
+    def is_course_lector(self, course_id: str, user_id: str) -> bool:
+        return self.queries.is_course_lector(course_id, user_id)
+
+    def update_course(self, course_id: str, user_role: str, user_id: str, update_data: Dict) -> Dict:
+        if 'lector_id' in update_data and user_role != "admin":
+            return {"error": "Only admin can change course lector", "status": 403}
+
+        if 'lector_id' in update_data and user_role == "admin":
+            new_lector = self.queries.get_user_by_id(update_data['lector_id'])
+            if not new_lector or new_lector.role != "teacher":
+                return {"error": "Invalid lector ID or not a teacher", "status": 400}
+
+        if 'groups' in update_data:
+            for group in update_data['groups']:
+                seminarist = self.queries.get_user_by_id(group['seminarist_id'])
+                if not seminarist or seminarist.role != "teacher":
+                    return {"error": f"Invalid seminarist ID {group['seminarist_id']} or not a teacher", "status": 400}
+
+        try:
+            return self.queries.update_course(
+                course_id=course_id,
+                user_role=user_role,
+                update_data=update_data
+            )
+        except Exception as e:
+            print(f"Error updating course: {e}")
+            return {"error": "Failed to update course", "status": 500}
+
+    def is_course_lector_or_seminarist(self, course_id: str, user_id: str) -> bool:
+        return self.queries.is_course_lector_or_seminarist(course_id, user_id)
+
+    def is_block_lector_or_seminarist(self, block_id: str, user_id: str) -> bool:
+        block_info = self.queries.get_query_block(block_id)
+        if not block_info or isinstance(block_info, dict):
+            return False
+        return self.queries.is_course_lector_or_seminarist(block_info.course_id, user_id)
+
+    def create_block(self, course_id: str, name: str, user_id: str, user_role: str) -> Dict:
+        course = self.queries.get_course_by_id(course_id)
+        if not course:
+            return {"error": "Course not found", "status": 404}
+
+        block_id = self.queries.generate_block_id(course_id)
+
+        try:
+            return self.queries.create_block(
+                block_id=block_id,
+                course_id=course_id,
+                name=name
+            )
+        except Exception as e:
+            print(f"Error creating block: {e}")
+            return {"error": "Failed to create block", "status": 500}
+
+    def get_block(self, block_id: str, user_id: str, user_role: str) -> Dict:
+        block_data = self.queries.get_query_block(block_id)
+        if isinstance(block_data, dict) and 'error' in block_data:
+            return block_data
+
+        return {
+            "block_id": block_data.block_id,
+            "name": block_data.name,
+            "units": [unit.unit_id for unit in block_data.units] if hasattr(block_data, 'units') else [],
+            "status": 200
+        }
+
+    def update_block(self, block_id: str, name: str, user_id: str, user_role: str) -> Dict:
+        try:
+            return self.queries.update_block(
+                block_id=block_id,
+                name=name
+            )
+        except Exception as e:
+            print(f"Error updating block: {e}")
+            return {"error": "Failed to update block", "status": 500}
+
+    def is_student_in_block_course(self, block_id: str, student_id: str) -> bool:
+        block_info = self.queries.get_query_block(block_id)
+        if not block_info or isinstance(block_info, dict):
+            return False
+        return self.queries.is_student_in_course(block_info.course_id, student_id)
+
+    def is_unit_lector_or_seminarist(self, unit_id: int, user_id: str) -> bool:
+        return self.queries.is_unit_lector_or_seminarist(unit_id, user_id)
+
+    def is_unit_accessible_to_student(self, unit_id: int, user_id: str) -> bool:
+        return self.queries.is_unit_accessible_to_student(unit_id, user_id)
+
+    def create_unit(self, block_id: str, name: str, unit_type: str, content: Union[str, dict],
+                    user_id: str, user_role: str) -> Dict:
+        block = self.queries.get_query_block(block_id)
+        if not block:
+            return {"error": "Block not found", "status": 404}
+
+        try:
+            return self.queries.create_unit(
+                block_id=block_id,
+                course_id=block.course_id,
+                name=name,
+                unit_type=unit_type,
+                content=content
+            )
+        except Exception as e:
+            print(f"Error creating unit: {e}")
+            return {"error": "Failed to create unit", "status": 500}
+
+    def update_unit(self, unit_id: int, update_data: Dict, user_id: str, user_role: str) -> Dict:
+        try:
+            return self.queries.update_unit(
+                unit_id=unit_id,
+                update_data=update_data
+            )
+        except Exception as e:
+            print(f"Error updating unit: {e}")
+            return {"error": "Failed to update unit", "status": 500}
+
+    def get_course_students(
+            self,
+            course_id: str,
+            user_id: str,
+            user_role: str,
+            limit: int = 20,
+            offset: int = 0,
+            search: str = ''
+    ) -> Dict:
+        if user_role not in ["admin", "teacher"]:
+            return {"error": "Access denied", "status": 403}
+
+        try:
+            if user_role == "teacher":
+                is_lector = self.queries.is_course_lector(course_id, user_id)
+                is_seminarist = self.queries.is_course_seminarist(course_id, user_id)
+
+                if not is_lector and not is_seminarist:
+                    return {"error": "Access denied - not your course", "status": 403}
+
+            return self.queries.get_course_students(
+                course_id=course_id,
+                user_id=user_id,
+                user_role=user_role,
+                limit=limit,
+                offset=offset,
+                search=search
+            )
+        except Exception as e:
+            print(f"Error in get_course_students: {e}")
+            return {"error": "Internal server error", "status": 500}
 
     def __del__(self):
         self.db.close()

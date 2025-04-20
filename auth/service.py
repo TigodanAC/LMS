@@ -20,6 +20,7 @@ class AuthService:
 
     def create_refresh_token_record(self, token: str, user_id: str, expires_delta: int):
         expires_at = datetime.utcnow() + timedelta(seconds=expires_delta)
+        self.queries.delete_refresh_tokens(user_id=user_id)
         return self.queries.create_refresh_token(token, user_id, expires_at)
 
     def validate_refresh_token(self, token: str):
@@ -30,10 +31,11 @@ class AuthService:
             return None
 
         if datetime.utcnow() > db_token.expires_at:
-            self.queries.delete_refresh_token(normalized_token)
+            self.queries.delete_refresh_tokens(token=normalized_token)
             print("Token expired")
             return None
 
+        self.queries.delete_refresh_tokens(user_id=db_token.user_id, token=normalized_token)
         return db_token.user
 
     def __del__(self):

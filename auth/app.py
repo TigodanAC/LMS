@@ -6,6 +6,8 @@ from functools import wraps
 from sqlalchemy.sql import text
 from auth.service import AuthService
 from database.session import SessionLocal
+from validation.auth_schemas import LoginRequest, RefreshRequest, TokenResponse
+from pydantic import ValidationError
 
 app = Flask(__name__)
 
@@ -40,7 +42,8 @@ def generate_refresh_token(email: str) -> str:
     payload = {
         "email": email,
         "type": "refresh",
-        "exp": int(time.time()) + REFRESH_EXP_DELTA_SECONDS
+        "exp": int(time.time()) + REFRESH_EXP_DELTA_SECONDS,
+        "rnd": os.urandom(16).hex()
     }
     token = jwt.encode(payload, private_key, algorithm=JWT_ALGORITHM)
     if isinstance(token, bytes):
@@ -54,13 +57,10 @@ def decode_jwt(token: str) -> dict:
 
 @app.route("/login", methods=["POST"])
 def login():
-    data = request.get_json()
-    if not data or 'email' not in data or 'password' not in data:
-        return make_response("Email and password required", 400)
-
     try:
+        login_data = LoginRequest(**request.get_json())
         auth_service = AuthService()
-        user = auth_service.authenticate_user(data["email"], data["password"])
+        user = auth_service.authenticate_user(login_data.email, login_data.password)
         if not user:
             return make_response("Invalid email or password", 401)
 
@@ -73,13 +73,24 @@ def login():
             REFRESH_EXP_DELTA_SECONDS
         )
 
-        response_data = {
-            "access_token": access_token,
-            "refresh_token": refresh_token
-        }
-        response = make_response(json.dumps(response_data, indent=4, ensure_ascii=False))
-        response.headers['Content-Type'] = 'application/json'
+        response_data = TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_token
+        )
+
+        json_response = json.dumps(
+            response_data.dict(),
+            indent=2,
+            ensure_ascii=False
+        )
+
+        response = make_response(json_response, 200)
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
         return response
+
+    except ValidationError as e:
+        error_response = json.dumps({"error": str(e)}, indent=2)
+        return make_response(error_response, 400)
     except Exception as e:
         print(f"Error: {e}")
         return make_response("Internal server error", 500)
@@ -87,22 +98,23 @@ def login():
 
 @app.route("/refresh", methods=["POST"])
 def refresh():
-    data = request.get_json()
-    if not data or 'refresh_token' not in data:
-        return make_response("Refresh token required", 400)
-
     try:
-        refresh_token = data['refresh_token'].replace('\n', '').strip()
+        refresh_data = RefreshRequest(**request.get_json())
         auth_service = AuthService()
-        user = auth_service.validate_refresh_token(refresh_token)
+        user = auth_service.validate_refresh_token(refresh_data.refresh_token)
         if not user:
             return make_response("Invalid or expired refresh token", 401)
-        new_access_token = generate_access_token(user.email, str(user.user_id))
 
-        return jsonify({
-            "access_token": new_access_token
-        }), 200
+        new_access_token = generate_access_token(user.email, str(user.user_id), user.role)
+        response_data = {"access_token": new_access_token}
 
+        json_response = json.dumps(response_data, indent=2, ensure_ascii=False)
+        response = make_response(json_response, 200)
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+        return response
+
+    except ValidationError as e:
+        return make_response(jsonify({"error": str(e)}), 400)
     except jwt.ExpiredSignatureError:
         return make_response("Refresh token expired", 401)
     except jwt.InvalidTokenError:

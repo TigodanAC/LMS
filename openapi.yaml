@@ -1,0 +1,578 @@
+openapi: 3.0.0
+info:
+  title: Learning Management System (LMS) API
+  description: API для системы управления обучением в колледжах
+  version: 1.0.0
+servers:
+  - url: http://localhost:8091
+    description: Development server
+  - url: https://api.college.ru
+    description: Production server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        status:
+          type: integer
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+    Course:
+      type: object
+      properties:
+        course_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        lector_id:
+          type: string
+    PaginatedResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Course'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    SOPQuestion:
+      type: object
+      properties:
+        question:
+          type: string
+        question_type:
+          type: string
+          enum: [rating, text]
+        answer:
+          type: integer
+          minimum: 1
+          maximum: 5
+        text_answer:
+          type: string
+    SOPBlock:
+      type: object
+      properties:
+        block_type:
+          type: string
+          enum: [course, lecturer, seminarist]
+        teacher_id:
+          type: string
+          nullable: true
+        questions_answers:
+          type: array
+          items:
+            $ref: '#/components/schemas/SOPQuestion'
+    SOPResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        status:
+          type: integer
+    TeacherSOPResults:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              course_id:
+                type: string
+              teaching_type:
+                type: string
+              questions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    question:
+                      type: string
+                    answers:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          answer:
+                            type: integer
+                          count:
+                            type: integer
+              text_comments:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    question:
+                      type: string
+                    answer:
+                      type: string
+        status:
+          type: integer
+  parameters:
+    limitParam:
+      name: limit
+      in: query
+      description: Number of items per page
+      required: false
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+    offsetParam:
+      name: offset
+      in: query
+      description: Pagination offset
+      required: false
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+    searchParam:
+      name: search
+      in: query
+      description: Search term
+      required: false
+      schema:
+        type: string
+    studentIdParam:
+      name: student_id
+      in: query
+      description: Student ID for admin access
+      required: false
+      schema:
+        type: string
+    courseIdPath:
+      name: course_id
+      in: path
+      required: true
+      schema:
+        type: string
+    testIdPath:
+      name: test_id
+      in: path
+      required: true
+      schema:
+        type: string
+    userIdPath:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        type: string
+    teacherIdQuery:
+      name: teacher_id
+      in: query
+      description: Teacher ID for admin access
+      required: false
+      schema:
+        type: string
+
+paths:
+  /login:
+    post:
+      tags: [Authentication]
+      summary: User login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+              required: [email, password]
+      responses:
+        '200':
+          description: Successful login
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Invalid credentials
+        '500':
+          description: Internal server error
+
+  /refresh:
+    post:
+      tags: [Authentication]
+      summary: Refresh access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+              required: [refresh_token]
+      responses:
+        '200':
+          description: New access token generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+        '400':
+          description: Invalid request
+        '401':
+          description: Invalid or expired refresh token
+        '500':
+          description: Internal server error
+
+  /courses:
+    get:
+      tags: [Courses]
+      summary: Get courses list
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/offsetParam'
+        - $ref: '#/components/parameters/searchParam'
+        - $ref: '#/components/parameters/studentIdParam'
+      responses:
+        '200':
+          description: List of courses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+        '403':
+          description: Forbidden
+        '500':
+          description: Internal server error
+    post:
+      tags: [Courses]
+      summary: Create new course (admin only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                lector_id:
+                  type: string
+                groups:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      group_id:
+                        type: string
+                      seminarist_id:
+                        type: string
+              required: [name, lector_id, groups]
+      responses:
+        '201':
+          description: Course created
+        '400':
+          description: Invalid request
+        '403':
+          description: Forbidden
+        '500':
+          description: Internal server error
+
+  /courses/{course_id}:
+    get:
+      tags: [Courses]
+      summary: Get course details
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/courseIdPath'
+      responses:
+        '200':
+          description: Course details
+        '404':
+          description: Course not found
+        '500':
+          description: Internal server error
+    put:
+      tags: [Courses]
+      summary: Update course (admin or lecturer)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/courseIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                groups:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      group_id:
+                        type: string
+                      seminarist_id:
+                        type: string
+      responses:
+        '200':
+          description: Course updated
+        '400':
+          description: Invalid request
+        '403':
+          description: Forbidden
+        '404':
+          description: Course not found
+        '500':
+          description: Internal server error
+
+  /sop:
+    post:
+      tags: [SOP]
+      summary: Submit SOP feedback
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                courses:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      course_id:
+                        type: string
+                      blocks:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/SOPBlock'
+              required: [courses]
+      responses:
+        '200':
+          description: SOP submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SOPResponse'
+        '400':
+          description: Invalid request
+        '500':
+          description: Internal server error
+
+  /sop/teacher_results:
+    get:
+      tags: [SOP]
+      summary: Get teacher SOP results
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/teacherIdQuery'
+      responses:
+        '200':
+          description: Teacher SOP results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherSOPResults'
+        '403':
+          description: Forbidden
+        '500':
+          description: Internal server error
+
+  /sop/course_results/{course_id}:
+    get:
+      tags: [SOP]
+      summary: Get course SOP results
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/courseIdPath'
+      responses:
+        '200':
+          description: Course SOP results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeacherSOPResults'
+        '403':
+          description: Forbidden
+        '500':
+          description: Internal server error
+
+  /tests:
+    post:
+      tags: [Tests]
+      summary: Create test (teacher only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                questions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      text:
+                        type: string
+                      type:
+                        type: string
+                        enum: [one_of, many, custom]
+                      answers:
+                        type: array
+                        items:
+                          type: string
+                answers:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      answer:
+                        type: array
+                        items:
+                          type: string
+                deadline:
+                  type: string
+                  format: date-time
+              required: [questions, answers]
+      responses:
+        '201':
+          description: Test created
+        '400':
+          description: Invalid request
+        '403':
+          description: Forbidden
+        '500':
+          description: Internal server error
+
+  /test_results/{test_id}:
+    post:
+      tags: [Tests]
+      summary: Submit test results
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/testIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  answer:
+                    type: array
+                    items:
+                      type: string
+      responses:
+        '201':
+          description: Test results submitted
+        '400':
+          description: Invalid request
+        '403':
+          description: Forbidden
+        '500':
+          description: Internal server error
+
+  /test_results/{test_id}/user/{user_id}:
+    get:
+      tags: [Tests]
+      summary: Get student test results (teacher only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/testIdPath'
+        - $ref: '#/components/parameters/userIdPath'
+      responses:
+        '200':
+          description: Student test results
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+        '500':
+          description: Internal server error
+    post:
+      tags: [Tests]
+      summary: Grade test manually (teacher only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/testIdPath'
+        - $ref: '#/components/parameters/userIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  is_right:
+                    type: boolean
+      responses:
+        '200':
+          description: Test graded
+        '400':
+          description: Invalid request
+        '403':
+          description: Forbidden
+        '500':
+          description: Internal server error
