@@ -1,13 +1,14 @@
 openapi: 3.0.0
 info:
-  title: Learning Management System (LMS) API
-  description: API для системы управления обучением в колледжах
+  title: College Management System API
   version: 1.0.0
+  description: API for managing courses, students, tests and SOP evaluations
+
 servers:
+  - url: http://localhost:8090
+    description: Auth service
   - url: http://localhost:8091
-    description: Development server
-  - url: https://api.college.ru
-    description: Production server
+    description: Course service
 
 components:
   securitySchemes:
@@ -15,14 +16,29 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+
   schemas:
-    ErrorResponse:
+    # Auth schemas
+    LoginRequest:
       type: object
+      required: [email, password]
       properties:
-        error:
+        email:
           type: string
-        status:
-          type: integer
+          format: email
+          minLength: 5
+          maxLength: 255
+        password:
+          type: string
+          minLength: 8
+          maxLength: 100
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          minLength: 50
     TokenResponse:
       type: object
       properties:
@@ -30,7 +46,60 @@ components:
           type: string
         refresh_token:
           type: string
-    Course:
+          nullable: true
+
+    # Course schemas
+    GroupSchema:
+      type: object
+      required: [group_id, seminarist_id]
+      properties:
+        group_id:
+          type: string
+          minLength: 1
+        seminarist_id:
+          type: string
+          minLength: 1
+    CourseCreateRequest:
+      type: object
+      required: [name, lector_id, groups]
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+        lector_id:
+          type: string
+          minLength: 1
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/GroupSchema'
+    CourseUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 100
+          nullable: true
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+        lector_id:
+          type: string
+          minLength: 1
+          nullable: true
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/GroupSchema'
+          nullable: true
+    CourseResponse:
       type: object
       properties:
         course_id:
@@ -39,37 +108,199 @@ components:
           type: string
         description:
           type: string
-        lector_id:
+          nullable: true
+        lector:
+          type: object
+          properties:
+            lector_id:
+              type: string
+            first_name:
+              type: string
+            last_name:
+              type: string
+        blocks:
+          type: array
+          items:
+            type: object
+            properties:
+              block_id:
+                type: string
+              name:
+                type: string
+              units:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    unit_id:
+                      type: integer
+                    name:
+                      type: string
+                    type:
+                      type: string
+                      enum: [lecture, seminar, test]
+
+    # Block schemas
+    BlockCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
           type: string
-    PaginatedResponse:
+          minLength: 3
+          maxLength: 100
+    BlockUpdateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 100
+    BlockResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        units:
+          type: array
+          items:
+            type: integer
+
+    # Unit schemas
+    UnitContentSchema:
+      type: object
+      properties:
+        test_id:
+          type: string
+          nullable: true
+        text_content:
+          type: string
+          nullable: true
+    UnitCreateRequest:
+      type: object
+      required: [name, type, content]
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 100
+        type:
+          type: string
+          enum: [lecture, seminar, test]
+        content:
+          type: object
+    UnitUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 100
+          nullable: true
+        type:
+          type: string
+          enum: [lecture, seminar, test]
+          nullable: true
+        content:
+          type: object
+          nullable: true
+    UnitResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        content:
+          type: object
+
+    # Test schemas
+    QuestionSchema:
+      type: object
+      required: [id, text, type]
+      properties:
+        id:
+          type: integer
+        text:
+          type: string
+          minLength: 5
+          maxLength: 500
+        type:
+          $ref: '#/components/schemas/QuestionTypeEnum'
+        answers:
+          type: array
+          items:
+            type: string
+          nullable: true
+    AnswerSchema:
+      type: object
+      required: [id, answer]
+      properties:
+        id:
+          type: integer
+        answer:
+          type: array
+          items:
+            type: string
+    TestCreateRequest:
+      type: object
+      required: [questions, answers]
+      properties:
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionSchema'
+        answers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnswerSchema'
+        deadline:
+          type: string
+          format: date-time
+          nullable: true
+    TestSubmitRequest:
+      type: object
+      required: [answers]
+      properties:
+        answers:
+          type: array
+          items:
+            type: object
+    TestDetailsResponse:
+      type: object
+      properties:
+        deadline:
+          type: string
+          format: date-time
+          nullable: true
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionSchema'
+    TestResultsResponse:
       type: object
       properties:
         data:
-          type: array
-          items:
-            $ref: '#/components/schemas/Course'
-        total:
+          type: object
+        status:
           type: integer
-        limit:
-          type: integer
-        offset:
-          type: integer
-    SOPQuestion:
+          default: 200
+
+    # SOP schemas
+    SOPQuestionResponse:
       type: object
+      discriminator:
+        propertyName: question_type
       properties:
         question:
           type: string
         question_type:
           type: string
-          enum: [rating, text]
-        answer:
-          type: integer
-          minimum: 1
-          maximum: 5
-        text_answer:
-          type: string
-    SOPBlock:
+          enum: [text, rating]
+    SOPBlockSubmit:
       type: object
+      required: [block_type, questions_answers]
       properties:
         block_type:
           type: string
@@ -80,131 +311,94 @@ components:
         questions_answers:
           type: array
           items:
-            $ref: '#/components/schemas/SOPQuestion'
-    SOPResponse:
+            $ref: '#/components/schemas/SOPQuestionResponse'
+    SOPSubmitRequest:
       type: object
+      required: [courses]
       properties:
-        message:
-          type: string
-        status:
-          type: integer
-    TeacherSOPResults:
-      type: object
-      properties:
-        data:
+        courses:
           type: array
           items:
             type: object
             properties:
               course_id:
                 type: string
-              teaching_type:
-                type: string
-              questions:
+              blocks:
                 type: array
                 items:
-                  type: object
-                  properties:
-                    question:
-                      type: string
-                    answers:
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          answer:
-                            type: integer
-                          count:
-                            type: integer
-              text_comments:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    question:
-                      type: string
-                    answer:
-                      type: string
+                  $ref: '#/components/schemas/SOPBlockSubmit'
+
+    # Enums
+    QuestionTypeEnum:
+      type: string
+      enum: [one_of, many, text, custom]
+    RoleEnum:
+      type: string
+      enum: [admin, teacher, student, lecturer, seminarist]
+    BlockTypeEnum:
+      type: string
+      enum: [course, lecturer, seminarist]
+
+    # Common
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
         status:
           type: integer
+    PaginatedResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
   parameters:
     limitParam:
       name: limit
       in: query
-      description: Number of items per page
-      required: false
       schema:
         type: integer
-        default: 20
         minimum: 1
         maximum: 100
+        default: 20
+      description: Number of items per page
     offsetParam:
       name: offset
       in: query
-      description: Pagination offset
-      required: false
       schema:
         type: integer
-        default: 0
         minimum: 0
+        default: 0
+      description: Page offset
     searchParam:
       name: search
       in: query
+      schema:
+        type: string
+        default: ''
       description: Search term
-      required: false
-      schema:
-        type: string
-    studentIdParam:
-      name: student_id
-      in: query
-      description: Student ID for admin access
-      required: false
-      schema:
-        type: string
-    courseIdPath:
-      name: course_id
-      in: path
-      required: true
-      schema:
-        type: string
-    testIdPath:
-      name: test_id
-      in: path
-      required: true
-      schema:
-        type: string
-    userIdPath:
-      name: user_id
-      in: path
-      required: true
-      schema:
-        type: string
-    teacherIdQuery:
-      name: teacher_id
-      in: query
-      description: Teacher ID for admin access
-      required: false
-      schema:
-        type: string
 
 paths:
+  # Auth endpoints
   /login:
     post:
-      tags: [Authentication]
+      tags: [Auth]
       summary: User login
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                email:
-                  type: string
-                  format: email
-                password:
-                  type: string
-              required: [email, password]
+              $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
           description: Successful login
@@ -214,6 +408,10 @@ paths:
                 $ref: '#/components/schemas/TokenResponse'
         '400':
           description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Invalid credentials
         '500':
@@ -221,21 +419,17 @@ paths:
 
   /refresh:
     post:
-      tags: [Authentication]
+      tags: [Auth]
       summary: Refresh access token
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                refresh_token:
-                  type: string
-              required: [refresh_token]
+              $ref: '#/components/schemas/RefreshRequest'
       responses:
         '200':
-          description: New access token generated
+          description: Token refreshed
           content:
             application/json:
               schema:
@@ -246,21 +440,25 @@ paths:
         '400':
           description: Invalid request
         '401':
-          description: Invalid or expired refresh token
+          description: Invalid or expired token
         '500':
           description: Internal server error
 
+  # Course endpoints
   /courses:
     get:
       tags: [Courses]
-      summary: Get courses list
-      security:
-        - bearerAuth: []
+      summary: Get list of courses
+      security: []
       parameters:
         - $ref: '#/components/parameters/limitParam'
         - $ref: '#/components/parameters/offsetParam'
         - $ref: '#/components/parameters/searchParam'
-        - $ref: '#/components/parameters/studentIdParam'
+        - name: student_id
+          in: query
+          schema:
+            type: string
+          description: Specific student ID (admin only)
       responses:
         '200':
           description: List of courses
@@ -270,11 +468,15 @@ paths:
                 $ref: '#/components/schemas/PaginatedResponse'
         '403':
           description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
     post:
       tags: [Courses]
-      summary: Create new course (admin only)
+      summary: Create new course
       security:
         - bearerAuth: []
       requestBody:
@@ -282,27 +484,19 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                name:
-                  type: string
-                description:
-                  type: string
-                lector_id:
-                  type: string
-                groups:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      group_id:
-                        type: string
-                      seminarist_id:
-                        type: string
-              required: [name, lector_id, groups]
+              $ref: '#/components/schemas/CourseCreateRequest'
       responses:
         '201':
           description: Course created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  course_id:
+                    type: string
+                  status:
+                    type: integer
         '400':
           description: Invalid request
         '403':
@@ -314,44 +508,41 @@ paths:
     get:
       tags: [Courses]
       summary: Get course details
-      security:
-        - bearerAuth: []
+      security: []
       parameters:
-        - $ref: '#/components/parameters/courseIdPath'
+        - name: course_id
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         '200':
           description: Course details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseResponse'
         '404':
           description: Course not found
         '500':
           description: Internal server error
     put:
       tags: [Courses]
-      summary: Update course (admin or lecturer)
+      summary: Update course
       security:
         - bearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/courseIdPath'
+        - name: course_id
+          in: path
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                name:
-                  type: string
-                description:
-                  type: string
-                groups:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      group_id:
-                        type: string
-                      seminarist_id:
-                        type: string
+              $ref: '#/components/schemas/CourseUpdateRequest'
       responses:
         '200':
           description: Course updated
@@ -364,87 +555,191 @@ paths:
         '500':
           description: Internal server error
 
-  /sop:
+  /courses/{course_id}/blocks:
     post:
-      tags: [SOP]
-      summary: Submit SOP feedback
+      tags: [Blocks]
+      summary: Create new block in course
       security:
         - bearerAuth: []
+      parameters:
+        - name: course_id
+          in: path
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                courses:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      course_id:
-                        type: string
-                      blocks:
-                        type: array
-                        items:
-                          $ref: '#/components/schemas/SOPBlock'
-              required: [courses]
+              $ref: '#/components/schemas/BlockCreateRequest'
       responses:
-        '200':
-          description: SOP submitted
+        '201':
+          description: Block created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SOPResponse'
+                type: object
+                properties:
+                  block_id:
+                    type: string
+                  status:
+                    type: integer
         '400':
           description: Invalid request
-        '500':
-          description: Internal server error
-
-  /sop/teacher_results:
-    get:
-      tags: [SOP]
-      summary: Get teacher SOP results
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/teacherIdQuery'
-      responses:
-        '200':
-          description: Teacher SOP results
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TeacherSOPResults'
         '403':
           description: Forbidden
         '500':
           description: Internal server error
 
-  /sop/course_results/{course_id}:
+  /blocks/{block_id}:
     get:
-      tags: [SOP]
-      summary: Get course SOP results
-      security:
-        - bearerAuth: []
+      tags: [Blocks]
+      summary: Get block details
+      security: []
       parameters:
-        - $ref: '#/components/parameters/courseIdPath'
+        - name: block_id
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         '200':
-          description: Course SOP results
+          description: Block details
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TeacherSOPResults'
+                $ref: '#/components/schemas/BlockResponse'
+        '403':
+          description: Forbidden
+        '404':
+          description: Block not found
+        '500':
+          description: Internal server error
+    put:
+      tags: [Blocks]
+      summary: Update block
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: block_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlockUpdateRequest'
+      responses:
+        '200':
+          description: Block updated
+        '400':
+          description: Invalid request
+        '403':
+          description: Forbidden
+        '404':
+          description: Block not found
+        '500':
+          description: Internal server error
+
+  /blocks/{block_id}/units:
+    post:
+      tags: [Units]
+      summary: Create new unit in block
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: block_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitCreateRequest'
+      responses:
+        '201':
+          description: Unit created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unit_id:
+                    type: integer
+                  status:
+                    type: integer
+        '400':
+          description: Invalid request
         '403':
           description: Forbidden
         '500':
           description: Internal server error
 
+  /units/{unit_id}:
+    get:
+      tags: [Units]
+      summary: Get unit details
+      security: []
+      parameters:
+        - name: unit_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Unit details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitResponse'
+        '403':
+          description: Forbidden
+        '404':
+          description: Unit not found
+        '500':
+          description: Internal server error
+    put:
+      tags: [Units]
+      summary: Update unit
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: unit_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitUpdateRequest'
+      responses:
+        '200':
+          description: Unit updated
+        '400':
+          description: Invalid request
+        '403':
+          description: Forbidden
+        '404':
+          description: Unit not found
+        '500':
+          description: Internal server error
+
+  # Test endpoints
   /tests:
     post:
       tags: [Tests]
-      summary: Create test (teacher only)
+      summary: Create new test
       security:
         - bearerAuth: []
       requestBody:
@@ -452,42 +747,21 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                questions:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      id:
-                        type: integer
-                      text:
-                        type: string
-                      type:
-                        type: string
-                        enum: [one_of, many, custom]
-                      answers:
-                        type: array
-                        items:
-                          type: string
-                answers:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      id:
-                        type: integer
-                      answer:
-                        type: array
-                        items:
-                          type: string
-                deadline:
-                  type: string
-                  format: date-time
-              required: [questions, answers]
+              $ref: '#/components/schemas/TestCreateRequest'
       responses:
         '201':
           description: Test created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  test_id:
+                    type: string
+                  message:
+                    type: string
+                  status:
+                    type: integer
         '400':
           description: Invalid request
         '403':
@@ -502,76 +776,139 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/testIdPath'
+        - name: test_id
+          in: path
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: array
-              items:
-                type: object
-                properties:
-                  id:
-                    type: integer
-                  answer:
-                    type: array
-                    items:
-                      type: string
+              $ref: '#/components/schemas/TestSubmitRequest'
       responses:
         '201':
           description: Test results submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestResultsResponse'
         '400':
           description: Invalid request
         '403':
           description: Forbidden
         '500':
           description: Internal server error
-
-  /test_results/{test_id}/user/{user_id}:
     get:
       tags: [Tests]
-      summary: Get student test results (teacher only)
+      summary: Get test or results
+      security: []
+      parameters:
+        - name: test_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Test details or results
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TestDetailsResponse'
+                  - $ref: '#/components/schemas/TestResultsResponse'
+        '403':
+          description: Forbidden
+        '404':
+          description: Test not found
+        '500':
+          description: Internal server error
+
+  # SOP endpoints
+  /sop:
+    post:
+      tags: [SOP]
+      summary: Submit SOP evaluation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SOPSubmitRequest'
+      responses:
+        '201':
+          description: SOP submitted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  status:
+                    type: integer
+        '400':
+          description: Invalid request
+        '403':
+          description: Forbidden
+        '409':
+          description: Already submitted
+        '500':
+          description: Internal server error
+
+  /sop/teacher_results:
+    get:
+      tags: [SOP]
+      summary: Get teacher SOP results
       security:
         - bearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/testIdPath'
-        - $ref: '#/components/parameters/userIdPath'
+        - name: teacher_id
+          in: query
+          schema:
+            type: string
+          description: Teacher ID (admin only)
       responses:
         '200':
-          description: Student test results
+          description: Teacher SOP results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestResultsResponse'
         '403':
           description: Forbidden
         '404':
           description: Not found
         '500':
           description: Internal server error
-    post:
-      tags: [Tests]
-      summary: Grade test manually (teacher only)
+
+  # Student endpoints
+  /courses/{course_id}/students:
+    get:
+      tags: [Students]
+      summary: Get course students
       security:
         - bearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/testIdPath'
-        - $ref: '#/components/parameters/userIdPath'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: array
-              items:
-                type: object
-                properties:
-                  id:
-                    type: integer
-                  is_right:
-                    type: boolean
+        - name: course_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/offsetParam'
+        - $ref: '#/components/parameters/searchParam'
       responses:
         '200':
-          description: Test graded
-        '400':
-          description: Invalid request
+          description: List of students
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
         '403':
           description: Forbidden
         '500':

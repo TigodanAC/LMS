@@ -16,7 +16,7 @@ class User(Base):
     first_name = Column(String(255), nullable=False)
     last_name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False)
-    group_id = Column(String, ForeignKey('groups.group_id'))
+    group_id = Column(String)
     creation_time = Column(TIMESTAMP, server_default=func.now(), nullable=False)
 
     refresh_tokens = relationship("RefreshToken", back_populates="user")
