@@ -1,4 +1,4 @@
-from pydantic import validator, BaseModel
+from pydantic import validator, BaseModel, ConfigDict
 from typing import Optional
 from datetime import datetime
 
@@ -15,13 +15,14 @@ def validate_sop_score(cls, v: int) -> int:
     return v
 
 
-def validate_email(cls, v: str) -> str:
+def validate_email(v: str) -> str:
     if "@" not in v or "." not in v.split("@")[-1]:
         raise ValueError("Invalid email format")
     return v.lower()
 
 
 class BaseValidationModel(BaseModel):
-    class Config:
-        str_strip_whitespace = True
-        validate_assignment = True
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        validate_assignment=True
+    )

@@ -308,3 +308,9 @@ To view data from a specific table (replace table_name with the actual table nam
 ```
 SELECT * FROM table_name;
 ```
+
+## Running Tests
+To execute the test suite, use the following command:
+```
+python3 -m pytest tests/ -v
+```

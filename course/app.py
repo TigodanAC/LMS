@@ -10,7 +10,8 @@ from validation.course_schemas import (
     TeacherSOPResultsRequest,
     CourseSOPResultsRequest,
     TestSubmitRequest,
-    TestResultsResponse,
+    TestSubmitResponse,
+    TestGetResultsResponse,
     TestDetailsResponse,
     StudentTestResultsRequest,
     TestUpdateRequest,
@@ -457,8 +458,7 @@ def submit_test_results(test_id):
         if isinstance(result, dict) and "error" in result:
             return jsonify(result), result.get("status", 400)
 
-        response = TestResultsResponse(
-            test_id=test_id,
+        response = TestSubmitResponse(
             results=result,
             submitted_at=datetime.now()
         )
@@ -594,7 +594,7 @@ def get_student_test_results(test_id, user_id):
         if not isinstance(response_data, (dict, list)):
             response_data = {"results": response_data}
 
-        response = TestResultsResponse(
+        response = TestGetResultsResponse(
             data=response_data,
             status=200
         )

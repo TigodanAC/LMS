@@ -125,6 +125,7 @@ class SetBlock(Base):
 
 
 class Test(Base):
+    __test__ = False
     __tablename__ = 'tests'
 
     test_id = Column(String, primary_key=True)
@@ -136,6 +137,7 @@ class Test(Base):
 
 
 class TestResult(Base):
+    __test__ = False
     __tablename__ = 'test_results'
 
     user_id = Column(String, ForeignKey('users.user_id'), primary_key=True)

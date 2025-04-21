@@ -126,8 +126,14 @@ class StudentTestResultsRequest(BaseModel):
         return v
 
 
-class TestResultsResponse(BaseModel):
-    data: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(default_factory=dict)
+class TestSubmitResponse(BaseValidationModel):
+    results: List[Dict[str, Any]]
+    submitted_at: datetime
+    status: int = 201
+
+
+class TestGetResultsResponse(BaseValidationModel):
+    data: Union[List[Dict[str, Any]], Dict[str, Any]]
     status: int = 200
 
 
@@ -245,8 +251,8 @@ class UnitUpdateRequest(BaseValidationModel):
     @validator('content')
     def validate_content(cls, v, values):
         if values.get('type') == 'test':
-            if not isinstance(v, dict) or 'test_id' not in v or 'test_url' not in v:
-                raise ValueError("For test units, content must be a dictionary with 'test_id' or 'test_url'")
+            if not isinstance(v, dict) or not ('test_id' in v or 'test_url' in v):
+                raise ValueError("For test units, content must contain either 'test_id' or 'test_url'")
         return v
 
 
