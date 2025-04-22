@@ -37,10 +37,9 @@ class AuthQueries:
 
         if user_id:
             query = query.filter(RefreshToken.user_id == user_id)
-
-        if token:
-            normalized_token = token.replace('\n', '').strip()
-            query = query.filter(RefreshToken.token != normalized_token)
+            query = query.filter(RefreshToken.token != token)
+        else:
+            query = query.filter(RefreshToken.token == token)
 
         query.delete()
         self.db.commit()

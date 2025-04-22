@@ -2,7 +2,7 @@
 import pytest
 import json
 from course.app import app
-from database.models import Course, User, Block, Unit, Test, Group, Set, SetBlock
+from database.models import Course, User, Block, Unit, Test, TestResult, Group, Set, SetBlock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -257,7 +257,8 @@ class TestRolePermissions:
             },
             headers=student_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"only admin can create courses" in response.data.lower()
 
     def test_teacher_cannot_create_course(self, client, teacher_headers):
         response = client.post(
@@ -269,14 +270,16 @@ class TestRolePermissions:
             },
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"only admin can create courses" in response.data.lower()
 
     def test_teacher_cannot_access_other_courses(self, client, teacher_headers, other_teacher_course):
         response = client.get(
             f"/courses/{other_teacher_course.course_id}",
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 404
+        assert b"course not found or access denied" in response.data.lower()
 
     def test_student_cannot_update_course(self, client, student_headers, test_course):
         response = client.put(
@@ -284,7 +287,8 @@ class TestRolePermissions:
             json={"name": "Updated Name"},
             headers=student_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 404
+        assert b"course not found or access denied" in response.data.lower()
 
     def test_student_cannot_create_block(self, client, student_headers, test_course):
         response = client.post(
@@ -292,7 +296,8 @@ class TestRolePermissions:
             json={"name": "New Block"},
             headers=student_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"access denied" in response.data.lower()
 
     def test_teacher_cannot_create_block_in_other_course(self, client, teacher_headers, other_teacher_course):
         response = client.post(
@@ -300,7 +305,8 @@ class TestRolePermissions:
             json={"name": "New Block"},
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"access denied" in response.data.lower()
 
     def test_student_cannot_create_unit(self, client, student_headers, test_block):
         response = client.post(
@@ -312,7 +318,8 @@ class TestRolePermissions:
             },
             headers=student_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"access denied" in response.data.lower()
 
     def test_teacher_cannot_create_unit_in_other_block(self, client, teacher_headers, other_teacher_course):
         block = Block(
@@ -329,7 +336,8 @@ class TestRolePermissions:
             },
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"access denied" in response.data.lower()
 
     def test_student_cannot_create_test(self, client, student_headers):
         response = client.post(
@@ -340,32 +348,37 @@ class TestRolePermissions:
             },
             headers=student_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"access denied" in response.data.lower()
 
     def test_teacher_cannot_view_other_teacher_sop_results(self, client, teacher_headers, other_teacher_user):
         response = client.get(
             f"/sop/teacher_results?teacher_id={other_teacher_user.user_id}",
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"only admin can specify teacher_id parameter" in response.data.lower()
 
     def test_student_cannot_view_teacher_sop_results(self, client, student_headers):
         response = client.get(
             "/sop/teacher_results",
             headers=student_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"access denied" in response.data.lower()
 
     def test_student_cannot_view_course_students(self, client, student_headers, test_course):
         response = client.get(
             f"/courses/{test_course.course_id}/students",
             headers=student_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"access denied" in response.data.lower()
 
     def test_teacher_cannot_view_other_course_students(self, client, teacher_headers, other_teacher_course):
         response = client.get(
             f"/courses/{other_teacher_course.course_id}/students",
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
+        assert b"access denied - not your course" in response.data.lower()
