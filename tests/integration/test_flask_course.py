@@ -7,8 +7,6 @@ class TestFlaskCoursesEndpoints:
             '/courses',
             headers={'Authorization': f'Bearer {valid_access_token}'}
         )
-        response.status_code = 200
-        response.data = json.dumps([{"course_id": "course1"}]).encode()
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data[0]["course_id"] == "course1"
@@ -25,7 +23,6 @@ class TestFlaskCoursesEndpoints:
             json=data,
             headers={'Authorization': f'Bearer {admin_access_token}'}
         )
-        response.status_code = 201
         assert response.status_code == 201
 
     def test_get_course_details_success(self, course_client, valid_access_token):
@@ -33,8 +30,6 @@ class TestFlaskCoursesEndpoints:
             '/courses/course1',
             headers={'Authorization': f'Bearer {valid_access_token}'}
         )
-        response.status_code = 200
-        response.data = json.dumps({"course_id": "course1", "name": "Math"}).encode()
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["name"] == "Math"
@@ -46,7 +41,6 @@ class TestFlaskCoursesEndpoints:
             json=data,
             headers={'Authorization': f'Bearer {teacher_access_token}'}
         )
-        response.status_code = 200
         assert response.status_code == 200
 
     def test_submit_sop_success(self, course_client, valid_access_token):
@@ -67,7 +61,6 @@ class TestFlaskCoursesEndpoints:
             json=data,
             headers={'Authorization': f'Bearer {valid_access_token}'}
         )
-        response.status_code = 201
         assert response.status_code == 201
 
     def test_get_teacher_sop_results(self, course_client, teacher_access_token):
@@ -75,7 +68,6 @@ class TestFlaskCoursesEndpoints:
             '/sop/teacher_results',
             headers={'Authorization': f'Bearer {teacher_access_token}'}
         )
-        response.status_code = 200
         assert response.status_code == 200
 
     def test_create_test_success(self, course_client, teacher_access_token):
@@ -88,7 +80,6 @@ class TestFlaskCoursesEndpoints:
             json=data,
             headers={'Authorization': f'Bearer {teacher_access_token}'}
         )
-        response.status_code = 201
         assert response.status_code == 201
 
     def test_submit_test_results(self, course_client, valid_access_token):
@@ -98,7 +89,6 @@ class TestFlaskCoursesEndpoints:
             json=data,
             headers={'Authorization': f'Bearer {valid_access_token}'}
         )
-        response.status_code = 201
         assert response.status_code == 201
 
     def test_create_block_success(self, course_client, teacher_access_token):
@@ -108,7 +98,6 @@ class TestFlaskCoursesEndpoints:
             json=data,
             headers={'Authorization': f'Bearer {teacher_access_token}'}
         )
-        response.status_code = 201
         assert response.status_code == 201
 
     def test_create_unit_with_mocked_service(self):
@@ -129,7 +118,6 @@ class TestFlaskCoursesEndpoints:
             content_type='application/json'
         )
 
-        response.status_code = 201
         assert response.status_code == 201
 
     def test_get_course_students(self, course_client, teacher_access_token):
@@ -137,5 +125,4 @@ class TestFlaskCoursesEndpoints:
             '/courses/course1/students',
             headers={'Authorization': f'Bearer {teacher_access_token}'}
         )
-        response.status_code = 200
         assert response.status_code == 200

@@ -156,14 +156,14 @@ class TestCourseEndpoints:
                 headers=admin_headers
             )
 
-        assert response.status_code == 401
+        assert response.status_code == 201
 
     def test_get_courses_as_student(self, client, db_session, student_headers, test_course):
         response = client.get(
             "/courses",
             headers=student_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 200
 
     def test_update_course_as_teacher(self, client, db_session, teacher_headers, test_course):
         response = client.put(
@@ -171,7 +171,7 @@ class TestCourseEndpoints:
             json={"name": "Updated Course Name"},
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 201
 
     def test_create_block_as_teacher(self, client, db_session, teacher_headers, test_course):
         response = client.post(
@@ -179,7 +179,7 @@ class TestCourseEndpoints:
             json={"name": "New Block"},
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 201
 
     def test_create_unit_in_block(self, client, db_session, teacher_headers, test_course):
         block = Block(
@@ -199,18 +199,18 @@ class TestCourseEndpoints:
             },
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 201
 
     def test_get_sop_results(self, client, db_session, teacher_headers, test_course):
         response = client.get(
             f"/sop/course_results/{test_course.course_id}",
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 200
 
     def test_get_course_students(self, client, db_session, teacher_headers, test_course, student_user):
         response = client.get(
             f"/courses/{test_course.course_id}/students",
             headers=teacher_headers
         )
-        assert response.status_code == 401
+        assert response.status_code == 200
